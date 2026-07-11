@@ -1,0 +1,79 @@
+{
+  "model_path": "/home/charles/WORK/train/evaluation/models/lora-step1797",
+  "images": 1000,
+  "protocol": {
+    "dataset": "VOC2007 test",
+    "classes": [
+      "aeroplane",
+      "bicycle",
+      "bird",
+      "boat",
+      "bottle",
+      "bus",
+      "car",
+      "cat",
+      "chair",
+      "cow",
+      "diningtable",
+      "dog",
+      "horse",
+      "motorbike",
+      "person",
+      "pottedplant",
+      "sheep",
+      "sofa",
+      "train",
+      "tvmonitor"
+    ],
+    "prompting": "one single-category grounding query for each GT-positive class per image",
+    "scope": "positive-category conditional localization; absent classes are not queried",
+    "generation_mode": "hybrid",
+    "max_new_tokens": 512,
+    "decoding": "greedy (do_sample=False)",
+    "confidence_note": "Model emits no confidence scores; detections use stable output order for AP ranking."
+  },
+  "ap": {
+    "map_50_95": 0.6739159484823023,
+    "ap50": 0.8822202809606814,
+    "ap75": 0.7275124826758109
+  },
+  "accuracy_iou50": {
+    "micro_precision": 0.881807180314643,
+    "micro_recall": 0.9321961620469084,
+    "micro_f1": 0.906301824212272
+  },
+  "per_class_ap50": {
+    "aeroplane": 0.9941860465116285,
+    "bicycle": 0.8729142320938396,
+    "bird": 0.9760649087221092,
+    "boat": 0.8788762960066551,
+    "bottle": 0.6965929007610951,
+    "bus": 0.9791666666666666,
+    "car": 0.945576862458159,
+    "cat": 0.988165680473373,
+    "chair": 0.7178489255807172,
+    "cow": 0.8475820883909118,
+    "diningtable": 0.900975534944309,
+    "dog": 0.9976374570446735,
+    "horse": 0.9638055762543464,
+    "motorbike": 0.8553984305927232,
+    "person": 0.810603745097476,
+    "pottedplant": 0.6440054793489882,
+    "sheep": 0.7702875388838656,
+    "sofa": 0.9213940142137398,
+    "train": 0.9640441438234256,
+    "tvmonitor": 0.9192790913449247
+  },
+  "performance": {
+    "warmup_images_excluded": 5,
+    "measured_images": 995,
+    "total_seconds": 467.60001189085597,
+    "images_per_second": 2.1278870288657012,
+    "queries_per_second": 3.2613343909750694,
+    "measured_queries": 1525,
+    "mean_latency_seconds": 0.4699497606943276,
+    "p50_latency_seconds": 0.3678898340003798,
+    "p95_latency_seconds": 1.1636443479947047,
+    "peak_gpu_memory_mib": 8058.25341796875
+  }
+}

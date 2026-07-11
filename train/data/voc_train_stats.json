@@ -1,0 +1,32 @@
+{
+  "statistics": {
+    "detection_samples": 16551,
+    "grounding_samples": 25632,
+    "voc2007_images": 5011,
+    "objects": 47223,
+    "voc2012_images": 11540,
+    "total_samples": 42183
+  },
+  "class_grounding_samples": {
+    "aeroplane": 916,
+    "bicycle": 826,
+    "bird": 1106,
+    "boat": 704,
+    "bottle": 1030,
+    "bus": 627,
+    "car": 1990,
+    "cat": 1428,
+    "chair": 1870,
+    "cow": 455,
+    "diningtable": 904,
+    "dog": 1727,
+    "horse": 777,
+    "motorbike": 785,
+    "person": 6469,
+    "pottedplant": 841,
+    "sheep": 423,
+    "sofa": 1067,
+    "train": 813,
+    "tvmonitor": 874
+  }
+}

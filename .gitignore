@@ -1,0 +1,82 @@
+# ============================================================
+# Root .gitignore for the WORK monorepo
+# ============================================================
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# ===== Virtual environments =====
+.venv/
+venv/
+env/
+ENV/
+
+# ===== Linting / test caches =====
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+.ruff/
+htmlcov/
+.coverage
+.coverage.*
+
+# ===== Environment & secrets =====
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ===== Datasets (large, download separately) =====
+datasets/
+
+# ===== Model checkpoints & training outputs (large, generated) =====
+train/outputs/
+train/logs/
+locate-anything/outputs/
+
+# ===== Downloaded models (large, fetch separately) =====
+locate-anything/models/
+
+# ===== Large binary artifacts =====
+*.safetensors
+*.pt
+*.bin
+*.ckpt
+*.pth
+*.gguf
+*.optimizer
+*.onnx
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+
+# ===== Third-party cloned repos =====
+train/Eagle/
+
+# ===== IDE / Editor =====
+.vscode/browse.vc.db
+.vscode/browse.vc.db-wal
+.vscode/browse.vc.db-shm
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Logs =====
+*.log
+train/evaluation/logs/

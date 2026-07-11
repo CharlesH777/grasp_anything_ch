@@ -1,0 +1,17 @@
+[Unit]
+Description=NVIDIA LocateAnything inference API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_DIR@
+EnvironmentFile=@PROJECT_DIR@/.env
+ExecStart=@PROJECT_DIR@/.venv/bin/locate-anything serve
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=600
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

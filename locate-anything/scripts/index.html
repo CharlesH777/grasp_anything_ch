@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocateAnything 推理界面</title>
+<style>
+:root {
+  --bg:        #0d1117;
+  --card:      #161b22;
+  --border:   #30363d;
+  --text:     #e6edf3;
+  --text2:   #8b949e;
+  --accent:   #6366f1;
+  --accent2:  #818cf8;
+  --green:    #3fb950;
+  --red:      #f85149;
+  --amber:    #d29922;
+  --radius:   10px;
+  --mono:     "SFMono-Regular","Consolas","Liberation Mono","Menlo",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 28px;border-bottom:1px solid var(--border);
+  background:linear-gradient(135deg,#161b22 0%,#0d1117 100%);
+}
+header h1{font-size:20px;font-weight:600;letter-spacing:-.3px}
+header h1 span{color:var(--accent2)}
+.health-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:13px;padding:4px 12px;border-radius:20px;
+  border:1px solid var(--border);background:var(--card);transition:all .3s;
+}
+.health-dot{width:8px;height:8px;border-radius:50%;background:var(--amber);animation:pulse 1.5s infinite}
+.health-badge.ok .health-dot{background:var(--green);animation:none}
+.health-badge.err .health-dot{background:var(--red);animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+main{display:grid;grid-template-columns:440px 1fr;gap:20px;padding:20px 28px;max-width:1600px;margin:0 auto}
+@media(max-width:980px){main{grid-template-columns:1fr;padding:16px}}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:22px}
+.panel h2{font-size:15px;font-weight:600;margin-bottom:16px;color:var(--text2)}
+.upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:36px 16px;text-align:center;cursor:pointer;transition:border-color .25s,background .25s}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--accent);background:rgba(99,102,241,.05)}
+.upload-zone svg{width:42px;height:42px;color:var(--text2);margin-bottom:10px}
+.upload-zone p{font-size:14px;color:var(--text)}
+.upload-zone .hint{font-size:12px;color:var(--text2);margin-top:6px}
+.image-preview{position:relative;border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+.image-preview img{display:block;width:100%;max-height:260px;object-fit:contain;background:#000}
+.image-info{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;font-size:12px;color:var(--text2);border-top:1px solid var(--border)}
+.image-info .tag{background:var(--bg);padding:2px 8px;border-radius:4px}
+.btn-remove{margin-left:auto;background:none;border:1px solid var(--border);color:var(--red);padding:2px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s}
+.btn-remove:hover{background:rgba(248,81,73,.1)}
+.form-group{margin-top:18px}
+.form-group>label{display:block;font-size:13px;font-weight:500;margin-bottom:6px}
+.form-group .desc{font-size:12px;color:var(--text2);margin-top:4px}
+select,input[type=text]{width:100%;padding:9px 12px;font-size:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);outline:none;transition:border-color .2s}
+select:focus,input[type=text]:focus{border-color:var(--accent)}
+select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%238b949e' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:36px}
+input:disabled{opacity:.45;cursor:not-allowed}
+input::placeholder{color:var(--text2);opacity:.6}
+.radio-row{display:flex;gap:10px}
+.radio-row label{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px;font-size:13px;cursor:pointer;border:1px solid var(--border);border-radius:8px;transition:all .2s}
+.radio-row label:has(input:checked){border-color:var(--accent);background:rgba(99,102,241,.08)}
+.radio-row input{accent-color:var(--accent)}
+.check-row{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+.check-row input{accent-color:var(--accent)}
+.btn-submit{width:100%;margin-top:22px;padding:12px;font-size:15px;font-weight:600;border:none;border-radius:8px;cursor:pointer;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;transition:opacity .2s,transform .1s}
+.btn-submit:hover:not(:disabled){opacity:.9}
+.btn-submit:active:not(:disabled){transform:scale(.98)}
+.btn-submit:disabled{opacity:.35;cursor:not-allowed}
+.btn-submit.loading{pointer-events:none;opacity:.7}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+.results-placeholder{display:flex;align-items:center;justify-content:center;min-height:400px;color:var(--text2);font-size:14px}
+.result-section{margin-bottom:24px}
+.result-section h3{font-size:14px;font-weight:600;color:var(--text2);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.result-section h3 .badge{font-size:11px;font-weight:400;padding:1px 8px;border-radius:10px;background:var(--bg);border:1px solid var(--border)}
+.image-compare{display:flex;gap:12px;flex-wrap:wrap}
+.image-compare .img-card{flex:1;min-width:280px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.image-compare .img-card .img-label{padding:6px 10px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);background:var(--bg)}
+.image-compare .img-card img{display:block;width:100%;background:#000}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--text2);font-weight:500;white-space:nowrap}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+tr:hover{background:rgba(255,255,255,.02)}
+.raw-output{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-family:var(--mono);font-size:12px;color:var(--text);overflow-x:auto;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.5}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.stat-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px}
+.stat-card .k{font-size:11px;color:var(--text2)}
+.stat-card .v{font-size:18px;font-weight:600;color:var(--text);margin-top:2px}
+.error-box{background:rgba(248,81,73,.08);border:1px solid var(--red);border-radius:8px;padding:14px;font-size:13px;color:var(--red)}
+.empty-hint{color:var(--text2);font-size:13px;padding:8px 0}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#484f58}
+</style>
+</head>
+<body>
+<header>
+  <h1>Locate<span>Anything</span></h1>
+  <div class="health-badge" id="healthBadge">
+    <span class="health-dot"></span><span id="healthText">检查中…</span>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2>推理配置</h2>
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" hidden>
+      <div id="uploadPlaceholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+        <p>拖放图片到此处，或点击选择</p>
+        <p class="hint">JPEG / PNG / WebP，最大 25 MB</p>
+      </div>
+      <div class="image-preview" id="imagePreview" style="display:none">
+        <img id="previewImg" alt="预览">
+        <div class="image-info">
+          <span class="tag" id="fileName"></span>
+          <span class="tag" id="fileSize"></span>
+          <span class="tag" id="imgDims"></span>
+          <button class="btn-remove" id="btnRemove">移除图片</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>任务模式</label>
+      <select id="modeSelect">
+        <option value="ground_single">单目标定位 — ground_single</option>
+        <option value="ground_multi">多目标定位 — ground_multi</option>
+        <option value="detect">类别检测 — detect</option>
+        <option value="point">通用点定位 — point</option>
+        <option value="ground_text">文字定位 — ground_text</option>
+        <option value="detect_text">全图文字检测 — detect_text</option>
+        <option value="gui_box">GUI 控件框 — gui_box</option>
+        <option value="gui_point">GUI 点击点 — gui_point</option>
+        <option value="raw">原始 Prompt — raw</option>
+      </select>
+      <div class="desc" id="modeDesc"></div>
+    </div>
+    <div class="form-group">
+      <label>查询文本</label>
+      <input type="text" id="queryInput" placeholder="the leftmost red cup">
+      <div class="desc" id="queryHint"></div>
+    </div>
+    <div class="form-group">
+      <label>生成模式</label>
+      <div class="radio-row">
+        <label><input type="radio" name="genMode" value="hybrid" checked> hybrid</label>
+        <label><input type="radio" name="genMode" value="fast"> fast</label>
+        <label><input type="radio" name="genMode" value="slow"> slow</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="check-row">
+        <input type="checkbox" id="annotateChk" checked> 返回标注图像
+      </label>
+    </div>
+    <button class="btn-submit" id="submitBtn" disabled>开始推理</button>
+  </section>
+  <section class="panel">
+    <h2>推理结果</h2>
+    <div class="results-placeholder" id="resultsPlaceholder">上传图片并点击「开始推理」后，结果将在此显示</div>
+    <div id="resultsContent" style="display:none"></div>
+  </section>
+</main>
+<script>
+const MODES={
+  ground_single:{label:"单目标定位",desc:"用自然语言定位单个目标实例",ph:"the leftmost red cup",req:true},
+  ground_multi:{label:"多目标定位",desc:"用自然语言定位所有匹配的实例",ph:"all workers wearing helmets",req:true},
+  detect:{label:"类别检测",desc:"检测指定类别的所有实例，多类别用逗号分隔",ph:"person, car, bicycle",req:true},
+  point:{label:"通用点定位",desc:"用自然语言定位图像中的一个点",ph:"center of the mug handle",req:true},
+  ground_text:{label:"文字定位",desc:"定位图像中指定的文字",ph:"TOTAL",req:true},
+  detect_text:{label:"全图文字检测",desc:"检测图像中的所有文字",ph:"（此模式无需输入查询文本）",req:false},
+  gui_box:{label:"GUI 控件框",desc:"定位 GUI 界面中的控件区域",ph:"submit button",req:true},
+  gui_point:{label:"GUI 点击点",desc:"定位 GUI 界面中的点击位置",ph:"settings icon",req:true},
+  raw:{label:"原始 Prompt",desc:"直接发送完整 prompt，不做任何包装",ph:"完整的 prompt 文本",req:true}
+};
+const $=id=>document.getElementById(id);
+let selectedFile=null,selectedImgURL=null;
+
+function fmtSize(b){return b<1024?b+" B":b<1048576?(b/1024).toFixed(1)+" KB":(b/1048576).toFixed(2)+" MB"}
+function fmtCoords(a){return"["+a.map(v=>Number.isInteger(+v)?+v:(+v).toFixed(4)).join(", ")+"]"}
+function esc(s){const d=document.createElement("div");d.textContent=s;return d.innerHTML}
+
+/* ── 上传区 ── */
+const uploadZone=$("uploadZone"),fileInput=$("fileInput");
+uploadZone.addEventListener("click",e=>{if(!e.target.closest(".btn-remove"))fileInput.click()});
+fileInput.addEventListener("change",()=>{if(fileInput.files[0])loadImage(fileInput.files[0])});
+["dragenter","dragover"].forEach(ev=>uploadZone.addEventListener(ev,e=>{e.preventDefault();uploadZone.classList.add("dragover")}));
+["dragleave","drop"].forEach(ev=>uploadZone.addEventListener(ev,e=>{e.preventDefault();uploadZone.classList.remove("dragover")}));
+uploadZone.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)loadImage(f)});
+
+function loadImage(file){
+  const ok=["image/jpeg","image/png","image/webp"];
+  if(!ok.includes(file.type)){alert("不支持的文件类型，请上传 JPEG / PNG / WebP");return}
+  if(file.size>25*1024*1024){alert("文件超过 25 MB 限制");return}
+  selectedFile=file;
+  if(selectedImgURL)URL.revokeObjectURL(selectedImgURL);
+  selectedImgURL=URL.createObjectURL(file);
+  $("previewImg").src=selectedImgURL;
+  $("fileName").textContent=file.name;
+  $("fileSize").textContent=fmtSize(file.size);
+  const tmp=new Image();
+  tmp.onload=()=>$("imgDims").textContent=tmp.naturalWidth+"×"+tmp.naturalHeight;
+  tmp.src=selectedImgURL;
+  $("uploadPlaceholder").style.display="none";
+  $("imagePreview").style.display="block";
+  updateBtn();
+}
+$("btnRemove").addEventListener("click",e=>{
+  e.stopPropagation();selectedFile=null;
+  if(selectedImgURL){URL.revokeObjectURL(selectedImgURL);selectedImgURL=null}
+  $("previewImg").src="";fileInput.value="";
+  $("uploadPlaceholder").style.display="block";
+  $("imagePreview").style.display="none";
+  updateBtn();
+});
+
+/* ── 模式 ── */
+function onModeChange(){
+  const m=MODES[$("modeSelect").value];
+  $("modeDesc").textContent=m.desc;
+  const qi=$("queryInput");
+  if(m.req){qi.disabled=false;qi.placeholder=m.ph;$("queryHint").textContent="示例: "+m.ph}
+  else{qi.disabled=true;qi.value="";qi.placeholder=m.ph;$("queryHint").textContent=""}
+  updateBtn();
+}
+$("modeSelect").addEventListener("change",onModeChange);
+
+/* ── 按钮 ── */
+function updateBtn(){
+  const m=MODES[$("modeSelect").value];
+  const ok=!m.req||$("queryInput").value.trim().length>0;
+  $("submitBtn").disabled=!selectedFile||!ok||$("submitBtn").classList.contains("loading");
+}
+$("queryInput").addEventListener("input",updateBtn);
+$("queryInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!$("submitBtn").disabled)doInference()});
+
+/* ── 健康检查 ── */
+async function checkHealth(){
+  try{
+    const d=await(await fetch("/healthz")).json();
+    if(d.status==="ok"&&d.model_loaded){$("healthBadge").className="health-badge ok";$("healthText").textContent="就绪 · "+(d.device||"cuda")}
+    else{$("healthBadge").className="health-badge err";$("healthText").textContent="模型未加载"}
+  }catch{$("healthBadge").className="health-badge err";$("healthText").textContent="服务不可达"}
+}
+checkHealth();setInterval(checkHealth,5000);
+
+/* ── 推理 ── */
+async function doInference(){
+  if(!selectedFile)return;
+  const mode=$("modeSelect").value,m=MODES[mode],query=$("queryInput").value.trim();
+  if(m.req&&!query)return;
+  const genMode=document.querySelector('input[name="genMode"]:checked').value;
+  const annotate=$("annotateChk").checked;
+  const btn=$("submitBtn");
+  btn.classList.add("loading");btn.innerHTML='<span class="spinner"></span>推理中…';btn.disabled=true;
+  $("resultsPlaceholder").style.display="flex";
+  $("resultsPlaceholder").innerHTML='<span class="spinner" style="width:24px;height:24px;border-width:3px;"></span> &nbsp;模型推理中，请稍候…';
+  $("resultsContent").style.display="none";
+  const fd=new FormData();
+  fd.append("image",selectedFile);
+  fd.append("query",m.req?query:"");
+  fd.append("mode",mode);
+  fd.append("generation_mode",genMode);
+  fd.append("annotate",annotate?"true":"false");
+  try{
+    const r=await fetch("/v1/locate",{method:"POST",body:fd});
+    if(!r.ok){let t="HTTP "+r.status;try{const e=await r.json();t=e.detail||t}catch{}throw new Error(t)}
+    renderResults(await r.json(),annotate);
+  }catch(err){
+    $("resultsPlaceholder").style.display="block";
+    $("resultsPlaceholder").innerHTML='<div class="error-box">推理失败: '+esc(err.message)+'</div>';
+    $("resultsContent").style.display="none";
+  }finally{
+    btn.classList.remove("loading");btn.textContent="开始推理";updateBtn();
+  }
+}
+$("submitBtn").addEventListener("click",doInference);
+
+/* ── 渲染结果 ── */
+function renderResults(data,annotate){
+  $("resultsPlaceholder").style.display="none";
+  $("resultsContent").style.display="block";
+  let h="";
+  h+='<div class="result-section"><h3>请求信息</h3><table><tbody>';
+  h+=`<tr><th>模型</th><td class="mono">${esc(data.model)}</td></tr>`;
+  h+=`<tr><th>模式</th><td class="mono">${esc(data.mode)} — ${MODES[data.mode]?.label||""}</td></tr>`;
+  h+=`<tr><th>生成模式</th><td class="mono">${esc(data.generation_mode)}</td></tr>`;
+  h+=`<tr><th>Prompt</th><td class="mono">${esc(data.prompt)}</td></tr>`;
+  h+=`<tr><th>图像尺寸</th><td class="mono">${data.image_width} × ${data.image_height}</td></tr>`;
+  h+='</tbody></table></div>';
+  if(annotate&&data.annotated_image_base64){
+    h+=`<div class="result-section"><h3>标注图像 <span class="badge">${data.boxes.length+data.points.length} 个结果</span></h3>`;
+    h+='<div class="image-compare">';
+    h+=`<div class="img-card"><div class="img-label">原始图像</div><img src="${selectedImgURL}" alt="原图"></div>`;
+    h+=`<div class="img-card"><div class="img-label">标注结果</div><img src="data:image/png;base64,${data.annotated_image_base64}" alt="标注图"></div>`;
+    h+='</div></div>';
+  }
+  h+=`<div class="result-section"><h3>检测框 <span class="badge">${data.boxes.length}</span></h3>`;
+  if(data.boxes.length){
+    h+='<table><thead><tr><th>#</th><th>标签</th><th class="mono">[0,1000]</th><th class="mono">归一化</th><th class="mono">像素</th></tr></thead><tbody>';
+    data.boxes.forEach((b,i)=>{h+=`<tr><td>${i+1}</td><td>${b.label?esc(b.label):'<span class="empty-hint">—</span>'}</td><td class="mono">${fmtCoords(b.coordinates_1000)}</td><td class="mono">${fmtCoords(b.normalized)}</td><td class="mono">${fmtCoords(b.pixels)}</td></tr>`});
+    h+='</tbody></table>';
+  }else{h+='<p class="empty-hint">无检测框</p>'}
+  h+='</div>';
+  h+=`<div class="result-section"><h3>检测点 <span class="badge">${data.points.length}</span></h3>`;
+  if(data.points.length){
+    h+='<table><thead><tr><th>#</th><th>标签</th><th class="mono">[0,1000]</th><th class="mono">归一化</th><th class="mono">像素</th></tr></thead><tbody>';
+    data.points.forEach((p,i)=>{h+=`<tr><td>${i+1}</td><td>${p.label?esc(p.label):'<span class="empty-hint">—</span>'}</td><td class="mono">${fmtCoords(p.coordinates_1000)}</td><td class="mono">${fmtCoords(p.normalized)}</td><td class="mono">${fmtCoords(p.pixels)}</td></tr>`});
+    h+='</tbody></table>';
+  }else{h+='<p class="empty-hint">无检测点</p>'}
+  h+='</div>';
+  if(data.generation_stats){
+    const secs=parseFloat(data.generation_stats.generation_seconds||0);
+    h+='<div class="result-section"><h3>推理统计</h3><div class="stats-grid">';
+    h+=`<div class="stat-card"><div class="k">耗时</div><div class="v">${secs.toFixed(3)} s</div></div>`;
+    h+=`<div class="stat-card"><div class="k">box 数量</div><div class="v">${data.generation_stats.box_count||0}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">检测框</div><div class="v">${data.boxes.length}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">检测点</div><div class="v">${data.points.length}</div></div>`;
+    h+='</div></div>';
+  }
+  h+='<div class="result-section"><h3>模型原始输出</h3><div class="raw-output">'+esc(data.raw_output)+'</div></div>';
+  $("resultsContent").innerHTML=h;
+}
+onModeChange();
+</script>
+</body>
+</html>

@@ -1,0 +1,106 @@
+--- a/Embodied/eaglevl/model/moon_vit/modeling_vit.py
++++ b/Embodied/eaglevl/model/moon_vit/modeling_vit.py
+@@ -119,23 +119,25 @@ def sdpa_attention(
+         q, k, v: tensor of shape (batch_size, seqlen, num_heads, head_dim),
+             or (tot_seqlens, num_heads, head_dim) if packing.
+     """
+-    seq_length = q.shape[0]
+-    attention_mask = torch.zeros(
+-        [1, seq_length, seq_length], device=q.device, dtype=torch.bool
+-    )
+-    for i in range(1, len(q_cu_seqlens)):
+-        attention_mask[
+-            ...,
+-            q_cu_seqlens[i - 1] : q_cu_seqlens[i],
+-            q_cu_seqlens[i - 1] : q_cu_seqlens[i],
+-        ] = True
+-    q = q.transpose(0, 1)
+-    k = k.transpose(0, 1)
+-    v = v.transpose(0, 1)
+-    attn_output = F.scaled_dot_product_attention(q, k, v, attention_mask, dropout_p=0.0)
+-    attn_output = attn_output.transpose(0, 1)
+-    attn_output = attn_output.reshape(seq_length, -1)
+-    return attn_output
++    if q_cu_seqlens is None or k_cu_seqlens is None:
++        q_cu_seqlens = torch.tensor([0, q.shape[0]], device=q.device)
++        k_cu_seqlens = torch.tensor([0, k.shape[0]], device=k.device)
++    if len(q_cu_seqlens) != len(k_cu_seqlens):
++        raise ValueError("q and k packed sequence counts must match")
++
++    outputs = []
++    for index in range(1, len(q_cu_seqlens)):
++        q_start, q_end = q_cu_seqlens[index - 1], q_cu_seqlens[index]
++        k_start, k_end = k_cu_seqlens[index - 1], k_cu_seqlens[index]
++        q_segment = q[q_start:q_end].transpose(0, 1).unsqueeze(0)
++        k_segment = k[k_start:k_end].transpose(0, 1).unsqueeze(0)
++        v_segment = v[k_start:k_end].transpose(0, 1).unsqueeze(0)
++        output = F.scaled_dot_product_attention(
++            q_segment, k_segment, v_segment, dropout_p=0.0, is_causal=False
++        )
++        outputs.append(output.squeeze(0).transpose(0, 1))
++
++    return torch.cat(outputs, dim=0).reshape(q.shape[0], -1)
+ 
+ 
+ def eager_attention(
+
+--- a/Embodied/eaglevl/train/locany_finetune_magi_stream.py
++++ b/Embodied/eaglevl/train/locany_finetune_magi_stream.py
+@@ -1251,7 +1251,7 @@
+ 
+ 
+ def main():
+-    launcher = os.environ.get('LAUNCHER', 'slurm')
++    launcher = os.environ.get('LAUNCHER', 'pytorch')
+     init_dist(launcher=launcher, backend='nccl')
+     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+     
+@@ -1334,9 +1334,9 @@
+         config._attn_implementation_autoset = False
+         config.text_config._attn_implementation = model_args.attn_implementation
+         config.text_config._attn_implementation_autoset = False
+-        config.vision_config._attn_implementation = 'flash_attention_2'
++        config.vision_config._attn_implementation = model_args.attn_implementation
+         config.vision_config._attn_implementation_autoset = False
+-        logger.info(f'Text attn: {model_args.attn_implementation}, Vision attn: flash_attention_2')
++        logger.info(f'Text attn: {model_args.attn_implementation}, Vision attn: {model_args.attn_implementation}')
+ 
+         config.image_token_index = image_token_index
+         config.text_config.block_size = int(model_args.block_size)
+@@ -1379,7 +1379,7 @@
+ 
+         if vision_config.model_type == 'moonvit':
+             logger.info('Loading MoonVit...')
+-            vision_config._attn_implementation = 'flash_attention_2'
++            vision_config._attn_implementation = model_args.attn_implementation
+             vision_model = MoonVitPretrainedModel.from_pretrained(
+                 model_args.vision_path, torch_dtype=torch.bfloat16, config=vision_config)
+         else:
+@@ -1387,7 +1387,7 @@
+             
+         logger.info('Loading LLM...')
+         text_config = AutoConfig.from_pretrained(model_args.llm_path, trust_remote_code=True)
+-        text_config._attn_implementation = 'magi'
++        text_config._attn_implementation = model_args.attn_implementation
+ 
+         llm = AutoModelForCausalLM.from_pretrained(
+             model_args.llm_path, torch_dtype=torch.bfloat16,
+@@ -1397,7 +1397,7 @@
+             vision_config.to_dict(), text_config.to_dict(), 
+             image_token_index=image_token_index, 
+             mlp_connector_layers=model_args.mlp_connector_layers)
+-        locateanything_config._attn_implementation = 'magi'
++        locateanything_config._attn_implementation = model_args.attn_implementation
+         model = LocateAnythingForConditionalGeneration(locateanything_config, vision_model, llm)
+ 
+         chat_template_data = load_config(model_args.chat_template_path)
+--- a/Embodied/eaglevl/model/locany/modeling_locateanything.py
++++ b/Embodied/eaglevl/model/locany/modeling_locateanything.py
+@@ -92,7 +92,6 @@
+             self.vision_model = vision_model
+         else:
+             if config.vision_config.model_type == 'moonvit':
+-                config.vision_config._attn_implementation = 'flash_attention_2'
+                 self.vision_model = MoonVitPretrainedModel(config.vision_config)
+             else:
+                 raise ValueError(f'Unsupported vision model type: {config.vision_config.model_type}. Only moonvit is supported.')

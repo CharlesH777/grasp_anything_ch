@@ -1,0 +1,10 @@
+# Config / tokenizer / weight files — restored from checkpoint, not tracked
+*.json
+*.txt
+*.jinja
+*.safetensors
+*.pt
+*.pth
+*.bin
+!.gitignore
+!README.md
