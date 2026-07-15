@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>grasp_anything 推理界面</title>
+<style>
+:root {
+  --bg:#0d1117;--card:#161b22;--border:#30363d;
+  --text:#e6edf3;--text2:#8b949e;
+  --accent:#6366f1;--accent2:#818cf8;
+  --green:#3fb950;--red:#f85149;--amber:#d29922;
+  --radius:10px;
+  --mono:"SFMono-Regular","Consolas","Liberation Mono","Menlo",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased}
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,#161b22 0%,#0d1117 100%)}
+header h1{font-size:20px;font-weight:600;letter-spacing:-.3px}
+header h1 span{color:var(--accent2)}
+.health-badge{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:4px 12px;border-radius:20px;border:1px solid var(--border);background:var(--card);transition:all .3s}
+.health-dot{width:8px;height:8px;border-radius:50%;background:var(--amber);animation:pulse 1.5s infinite}
+.health-badge.ok .health-dot{background:var(--green);animation:none}
+.health-badge.err .health-dot{background:var(--red);animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+main{display:grid;grid-template-columns:400px 1fr;gap:20px;padding:20px 28px;max-width:1600px;margin:0 auto}
+@media(max-width:980px){main{grid-template-columns:1fr;padding:16px}}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:22px}
+.panel h2{font-size:15px;font-weight:600;margin-bottom:16px;color:var(--text2)}
+
+/* model selector */
+.model-bar{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:18px}
+.model-bar label{display:block;font-size:13px;font-weight:500;margin-bottom:6px}
+.model-bar select{width:100%;padding:8px 12px;font-size:14px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);outline:none;cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%238b949e' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:36px;transition:border-color .2s}
+.model-bar select:focus{border-color:var(--accent)}
+.model-bar select:disabled{opacity:.4;cursor:not-allowed}
+.model-bar .desc{font-size:12px;color:var(--text2);margin-top:4px}
+.model-bar.switching{border-color:var(--amber);animation:glow 1.5s ease-in-out infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 0 rgba(210,153,34,0)}50%{box-shadow:0 0 12px rgba(210,153,34,.3)}}
+
+/* upload */
+.upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:36px 16px;text-align:center;cursor:pointer;transition:border-color .25s,background .25s;outline:none}
+.upload-zone:hover,.upload-zone.dragover,.upload-zone:focus-visible{border-color:var(--accent);background:rgba(99,102,241,.05)}
+.upload-zone svg{width:42px;height:42px;color:var(--text2);margin-bottom:10px}
+.upload-zone p{font-size:14px;color:var(--text)}
+.upload-zone .hint{font-size:12px;color:var(--text2);margin-top:6px}
+.image-preview{position:relative;border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+.image-preview img{display:block;width:100%;max-height:260px;object-fit:contain;background:#000}
+.image-info{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;font-size:12px;color:var(--text2);border-top:1px solid var(--border)}
+.image-info .tag{background:var(--bg);padding:2px 8px;border-radius:4px}
+.btn-remove{margin-left:auto;background:none;border:1px solid var(--border);color:var(--red);padding:2px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:all .2s}
+.btn-remove:hover{background:rgba(248,81,73,.1)}
+.btn-remove:disabled{opacity:.3;cursor:not-allowed}
+
+/* form */
+.form-group{margin-top:18px}
+.form-group>label{display:block;font-size:13px;font-weight:500;margin-bottom:6px}
+.form-group .desc{font-size:12px;color:var(--text2);margin-top:4px}
+select,input[type=text]{width:100%;padding:9px 12px;font-size:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);outline:none;transition:border-color .2s}
+select:focus,input[type=text]:focus{border-color:var(--accent)}
+select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%238b949e' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:36px}
+input:disabled{opacity:.45;cursor:not-allowed}
+input::placeholder{color:var(--text2);opacity:.6}
+.radio-row{display:flex;gap:10px}
+.radio-row label{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px;font-size:13px;cursor:pointer;border:1px solid var(--border);border-radius:8px;transition:all .2s}
+.radio-row label:has(input:checked),.radio-row label.checked{border-color:var(--accent);background:rgba(99,102,241,.08)}
+.radio-row input{accent-color:var(--accent)}
+
+/* submit */
+.btn-submit{width:100%;margin-top:22px;padding:12px;font-size:15px;font-weight:600;border:none;border-radius:8px;cursor:pointer;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;transition:opacity .2s,transform .1s}
+.btn-submit:hover:not(:disabled){opacity:.9}
+.btn-submit:active:not(:disabled){transform:scale(.98)}
+.btn-submit:disabled{opacity:.35;cursor:not-allowed}
+.btn-submit.loading{cursor:pointer;opacity:.85}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* canvas */
+.canvas-wrap{position:relative;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#000;margin-bottom:16px}
+.canvas-wrap canvas{display:block;cursor:crosshair}
+.canvas-caption{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text2);margin-bottom:16px}
+.canvas-caption .tag{background:var(--bg);padding:2px 8px;border-radius:4px;border:1px solid var(--border)}
+.canvas-caption .model-tag{border-color:var(--accent);color:var(--accent2)}
+
+/* results */
+.results-placeholder{display:flex;align-items:center;justify-content:center;min-height:400px;color:var(--text2);font-size:14px;text-align:center;flex-direction:column;gap:10px}
+.result-section{margin-bottom:24px}
+.result-section h3{font-size:14px;font-weight:600;color:var(--text2);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.result-section h3 .badge{font-size:11px;font-weight:400;padding:1px 8px;border-radius:10px;background:var(--bg);border:1px solid var(--border)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--text2);font-weight:500;white-space:nowrap}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+tr[data-idx]{cursor:pointer;transition:background .15s}
+tr[data-idx]:hover{background:rgba(255,255,255,.05)}
+tr.hl{background:rgba(255,255,255,.06)!important}
+.raw-output{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-family:var(--mono);font-size:12px;color:var(--text);overflow-x:auto;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.5}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.stat-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px}
+.stat-card .k{font-size:11px;color:var(--text2)}
+.stat-card .v{font-size:18px;font-weight:600;color:var(--text);margin-top:2px}
+.error-box{background:rgba(248,81,73,.08);border:1px solid var(--red);border-radius:8px;padding:14px;font-size:13px;color:var(--red);max-width:480px}
+.empty-hint{color:var(--text2);font-size:13px;padding:8px 0}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--red);padding:10px 20px;border-radius:8px;font-size:13px;color:var(--red);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.4);animation:toastIn .25s ease}
+@keyframes toastIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#484f58}
+</style>
+</head>
+<body>
+<header>
+  <h1>grasp_<span>anything</span></h1>
+  <div class="health-badge" id="healthBadge">
+    <span class="health-dot"></span><span id="healthText">检查中…</span>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2>推理配置</h2>
+
+    <!-- 模型选择 -->
+    <div class="model-bar" id="modelBar">
+      <label>模型权重</label>
+      <select id="modelSelect" disabled>
+        <option>加载中…</option>
+      </select>
+      <div class="desc" id="modelDesc"></div>
+    </div>
+
+    <!-- 上传区 -->
+    <div class="upload-zone" id="uploadZone" tabindex="0" role="button" aria-label="上传图片">
+      <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" hidden>
+      <div id="uploadPlaceholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+        <p>拖放图片到此处，或点击选择</p>
+        <p class="hint">JPEG / PNG / WebP，最大 25 MB</p>
+      </div>
+      <div class="image-preview" id="imagePreview" style="display:none">
+        <img id="previewImg" alt="预览">
+        <div class="image-info">
+          <span class="tag" id="fileName"></span>
+          <span class="tag" id="fileSize"></span>
+          <span class="tag" id="imgDims"></span>
+          <button class="btn-remove" id="btnRemove">移除图片</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>任务模式</label>
+      <select id="modeSelect">
+        <option value="ground_single">单目标定位 — ground_single</option>
+        <option value="ground_multi">多目标定位 — ground_multi</option>
+        <option value="detect">类别检测 — detect</option>
+        <option value="point">通用点定位 — point</option>
+        <option value="ground_text">文字定位 — ground_text</option>
+        <option value="detect_text">全图文字检测 — detect_text</option>
+        <option value="gui_box">GUI 控件框 — gui_box</option>
+        <option value="gui_point">GUI 点击点 — gui_point</option>
+        <option value="raw">原始 Prompt — raw</option>
+      </select>
+      <div class="desc" id="modeDesc"></div>
+    </div>
+    <div class="form-group">
+      <label>查询文本</label>
+      <input type="text" id="queryInput" placeholder="the leftmost red cup">
+      <div class="desc" id="queryHint"></div>
+    </div>
+    <div class="form-group">
+      <label>生成模式</label>
+      <div class="radio-row" id="genModeRow">
+        <label><input type="radio" name="genMode" value="hybrid" checked> hybrid</label>
+        <label><input type="radio" name="genMode" value="fast"> fast</label>
+        <label><input type="radio" name="genMode" value="slow"> slow</label>
+      </div>
+      <div class="desc" id="genModeDesc"></div>
+    </div>
+    <button class="btn-submit" id="submitBtn" disabled>开始推理</button>
+  </section>
+  <section class="panel" id="resultsPanel">
+    <h2>推理结果</h2>
+    <div class="results-placeholder" id="resultsPlaceholder">上传图片并点击「开始推理」后，结果将在此显示</div>
+    <div id="resultsContent" style="display:none"></div>
+  </section>
+</main>
+<script>
+/* ====== 配置数据 ====== */
+const MODES={
+  ground_single:{label:"单目标定位",desc:"用自然语言定位单个目标实例",ph:"the leftmost red cup",req:true},
+  ground_multi:{label:"多目标定位",desc:"用自然语言定位所有匹配的实例",ph:"all workers wearing helmets",req:true},
+  detect:{label:"类别检测",desc:"检测指定类别的所有实例，多类别用逗号分隔",ph:"person, car, bicycle",req:true},
+  point:{label:"通用点定位",desc:"用自然语言定位图像中的一个点",ph:"center of the mug handle",req:true},
+  ground_text:{label:"文字定位",desc:"定位图像中指定的文字",ph:"TOTAL",req:true},
+  detect_text:{label:"全图文字检测",desc:"检测图像中的所有文字",ph:"（此模式无需输入查询文本）",req:false},
+  gui_box:{label:"GUI 控件框",desc:"定位 GUI 界面中的控件区域",ph:"submit button",req:true},
+  gui_point:{label:"GUI 点击点",desc:"定位 GUI 界面中的点击位置",ph:"settings icon",req:true},
+  raw:{label:"原始 Prompt",desc:"直接发送完整 prompt，不做任何包装",ph:"完整的 prompt 文本",req:true}
+};
+const GEN_DESC={hybrid:"默认推荐，PBD 与逐 token 回退之间自动切换",fast:"优先吞吐量",slow:"完全自回归，优先稳定性"};
+const COLORS=["#00ff66","#3b82f6","#f59e0b","#ec4899","#8b5cf6","#06b6d4","#ef4444","#84cc16"];
+const $=id=>document.getElementById(id);
+let selectedFile=null,selectedImgURL=null,abortCtrl=null,isLoading=false,isSwitching=false;
+let canvasImg=null,currentResult=null,hlIdx=-1,hlType="",inferTimer=null;
+let currentModelName="";
+
+/* ====== 工具 ====== */
+function fmtSize(b){return b<1024?b+" B":b<1048576?(b/1024).toFixed(1)+" KB":(b/1048576).toFixed(2)+" MB"}
+function fmtCoords(a){return"["+a.map(v=>Number.isInteger(+v)?+v:(+v).toFixed(4)).join(", ")+"]"}
+function esc(s){const d=document.createElement("div");d.textContent=s;return d.innerHTML}
+function toast(m){document.querySelectorAll(".toast").forEach(t=>t.remove());const t=document.createElement("div");t.className="toast";t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
+function color(i){return COLORS[i%COLORS.length]}
+
+/* ====== 模型管理 ====== */
+async function loadModels(){
+  try{
+    const r=await fetch("/v1/models");
+    const data=await r.json();
+    const sel=$("modelSelect");
+    sel.innerHTML="";
+    for(const[k,info]of Object.entries(data.models)){
+      const opt=document.createElement("option");
+      opt.value=k;opt.textContent=info.name;
+      if(k===data.current)opt.selected=true;
+      sel.appendChild(opt);
+    }
+    currentModelName=data.models[data.current]?.name||"";
+    $("modelDesc").textContent=data.models[data.current]?.desc||"";
+    sel.disabled=false;
+  }catch(e){$("modelDesc").textContent="加载模型列表失败";}
+}
+$("modelSelect").addEventListener("change",async()=>{
+  if(isSwitching||isLoading)return;
+  const modelKey=$("modelSelect").value;
+  const sel=$("modelSelect");
+  isSwitching=true;sel.disabled=true;
+  $("modelBar").classList.add("switching");
+  $("submitBtn").disabled=true;btnRemove.disabled=true;
+  $("modelDesc").innerHTML='<span class="spinner" style="width:12px;height:12px;border-width:2px"></span> 切换中… 模型加载可能需要 1-2 分钟';
+  $("healthBadge").className="health-badge";
+  $("healthText").textContent="切换中…";
+
+  try{
+    const r=await fetch("/v1/switch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:modelKey})});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.detail||"HTTP "+r.status);
+    currentModelName=$("modelSelect").selectedOptions[0].textContent;
+    $("modelDesc").textContent=$("modelSelect").selectedOptions[0].textContent+" 已就绪";
+    toast("模型已切换: "+currentModelName);
+  }catch(err){
+    toast("切换失败: "+err.message);
+    // revert selection
+    await loadModels();
+  }finally{
+    isSwitching=false;sel.disabled=false;
+    $("modelBar").classList.remove("switching");
+    btnRemove.disabled=false;updateBtn();
+    checkHealth();
+  }
+});
+
+/* ====== 上传区 ====== */
+const uploadZone=$("uploadZone"),fileInput=$("fileInput"),btnRemove=$("btnRemove");
+uploadZone.addEventListener("click",e=>{if(!e.target.closest(".btn-remove")&&!isLoading)fileInput.click()});
+uploadZone.addEventListener("keydown",e=>{if((e.key==="Enter"||e.key===" ")&&!isLoading){e.preventDefault();fileInput.click()}});
+fileInput.addEventListener("change",()=>{if(fileInput.files[0])loadImage(fileInput.files[0])});
+["dragenter","dragover"].forEach(ev=>uploadZone.addEventListener(ev,e=>{e.preventDefault();uploadZone.classList.add("dragover")}));
+["dragleave","drop"].forEach(ev=>uploadZone.addEventListener(ev,e=>{e.preventDefault();uploadZone.classList.remove("dragover")}));
+uploadZone.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)loadImage(f)});
+
+function loadImage(file){
+  const ok=["image/jpeg","image/png","image/webp"];
+  if(!ok.includes(file.type)){toast("不支持的文件类型，请上传 JPEG / PNG / WebP");return}
+  if(file.size>25*1024*1024){toast("文件超过 25 MB 限制");return}
+  selectedFile=file;
+  if(selectedImgURL)URL.revokeObjectURL(selectedImgURL);
+  selectedImgURL=URL.createObjectURL(file);
+  $("previewImg").src=selectedImgURL;
+  $("fileName").textContent=file.name;
+  $("fileSize").textContent=fmtSize(file.size);
+  const tmp=new Image();tmp.onload=()=>$("imgDims").textContent=tmp.naturalWidth+"×"+tmp.naturalHeight;tmp.src=selectedImgURL;
+  $("uploadPlaceholder").style.display="none";
+  $("imagePreview").style.display="block";
+  resetResults();updateBtn();
+}
+btnRemove.addEventListener("click",e=>{
+  e.stopPropagation();if(isLoading)return;
+  selectedFile=null;
+  if(selectedImgURL){URL.revokeObjectURL(selectedImgURL);selectedImgURL=null}
+  $("previewImg").src="";fileInput.value="";
+  $("uploadPlaceholder").style.display="block";
+  $("imagePreview").style.display="none";
+  resetResults();updateBtn();
+});
+function resetResults(){
+  $("resultsPlaceholder").style.display="flex";
+  $("resultsPlaceholder").textContent="上传图片并点击「开始推理」后，结果将在此显示";
+  $("resultsContent").style.display="none";
+  $("resultsContent").innerHTML="";
+  currentResult=null;canvasImg=null;
+}
+
+/* ====== 模式 & 生成模式 ====== */
+function onModeChange(){
+  const m=MODES[$("modeSelect").value];
+  $("modeDesc").textContent=m.desc;
+  const qi=$("queryInput");
+  if(m.req){qi.disabled=false;qi.placeholder=m.ph;$("queryHint").textContent="示例: "+m.ph}
+  else{qi.disabled=true;qi.value="";qi.placeholder=m.ph;$("queryHint").textContent=""}
+  updateBtn();
+}
+$("modeSelect").addEventListener("change",onModeChange);
+function onGenModeChange(){
+  const v=document.querySelector('input[name="genMode"]:checked').value;
+  $("genModeDesc").textContent=GEN_DESC[v];
+  document.querySelectorAll("#genModeRow label").forEach(l=>l.classList.remove("checked"));
+  document.querySelector('input[name="genMode"]:checked').closest("label").classList.add("checked");
+}
+document.querySelectorAll('input[name="genMode"]').forEach(r=>r.addEventListener("change",onGenModeChange));
+
+/* ====== 按钮 ====== */
+function updateBtn(){
+  const m=MODES[$("modeSelect").value];
+  const ok=!m.req||$("queryInput").value.trim().length>0;
+  $("submitBtn").disabled=isLoading||isSwitching||!selectedFile||!ok;
+}
+$("queryInput").addEventListener("input",updateBtn);
+$("queryInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!$("submitBtn").disabled&&!isLoading)doInference()});
+
+/* ====== 健康检查 ====== */
+let healthTimer=null;
+async function checkHealth(){
+  if(isSwitching)return;
+  try{
+    const d=await(await fetch("/healthz")).json();
+    if(d.status==="ok"&&d.model_loaded){
+      $("healthBadge").className="health-badge ok";
+      $("healthText").textContent="就绪"+(currentModelName?" · "+currentModelName:"");
+    }else{
+      $("healthBadge").className="health-badge err";
+      $("healthText").textContent="模型未加载";
+    }
+  }catch{
+    $("healthBadge").className="health-badge err";
+    $("healthText").textContent="服务不可达";
+  }
+}
+document.addEventListener("visibilitychange",()=>{if(document.hidden){clearInterval(healthTimer);healthTimer=null}else if(!healthTimer&&!isSwitching){checkHealth();healthTimer=setInterval(checkHealth,5000)}});
+
+/* ====== 推理 ====== */
+async function doInference(){
+  if(!selectedFile||isLoading)return;
+  const mode=$("modeSelect").value,m=MODES[mode],query=$("queryInput").value.trim();
+  if(m.req&&!query)return;
+  const genMode=document.querySelector('input[name="genMode"]:checked').value;
+  const btn=$("submitBtn");const captureURL=selectedImgURL;
+  const captureModel=currentModelName;
+  isLoading=true;btn.classList.add("loading");
+  btn.innerHTML='<span class="spinner"></span>推理中… <span style="font-size:12px;opacity:.7">(点击取消)</span>';
+  btn.disabled=false;btnRemove.disabled=true;
+  abortCtrl=new AbortController();
+  const fd=new FormData();
+  fd.append("image",selectedFile);fd.append("query",m.req?query:"");
+  fd.append("mode",mode);fd.append("generation_mode",genMode);
+  fd.append("annotate","false");
+  const t0=Date.now();
+  inferTimer=setInterval(()=>{
+    const s=((Date.now()-t0)/1000).toFixed(1);
+    $("resultsPlaceholder").innerHTML='<span class="spinner" style="width:24px;height:24px;border-width:3px"></span><span>模型推理中… '+s+'s</span>';
+  },100);
+  $("resultsPlaceholder").style.display="flex";
+  $("resultsContent").style.display="none";
+  try{
+    const r=await fetch("/v1/locate",{method:"POST",body:fd,signal:abortCtrl.signal});
+    if(!r.ok){let t="HTTP "+r.status;try{const e=await r.json();t=e.detail||t}catch{}throw new Error(t)}
+    const data=await r.json();
+    currentResult=data;
+    setupCanvas(captureURL,data);
+    renderResults(data,captureModel);
+  }catch(err){
+    const ph=$("resultsPlaceholder");ph.style.display="flex";
+    if(err.name==="AbortError")ph.innerHTML='<span class="empty-hint">已取消</span>';
+    else ph.innerHTML='<div class="error-box">推理失败: '+esc(err.message)+'</div>';
+    $("resultsContent").style.display="none";
+  }finally{
+    clearInterval(inferTimer);isLoading=false;abortCtrl=null;
+    btn.classList.remove("loading");btn.textContent="开始推理";btnRemove.disabled=false;updateBtn();
+  }
+}
+$("submitBtn").addEventListener("click",()=>{if(isLoading&&abortCtrl){abortCtrl.abort();return}doInference()});
+
+/* ====== Canvas 标注渲染 ====== */
+function setupCanvas(imgURL,data){
+  currentResult=data;hlIdx=-1;hlType="";
+  canvasImg=new Image();
+  canvasImg.onload=renderCanvas;
+  canvasImg.src=imgURL;
+}
+function renderCanvas(){
+  if(!canvasImg||!currentResult)return;
+  const canvas=$("resultCanvas");if(!canvas)return;
+  const wrap=canvas.parentElement;
+  const ctx=canvas.getContext("2d");
+  const dpr=window.devicePixelRatio||1;
+  const maxW=wrap.clientWidth-4,maxH=560;
+  const scale=Math.min(maxW/canvasImg.naturalWidth,maxH/canvasImg.naturalHeight,1);
+  const dw=Math.round(canvasImg.naturalWidth*scale);
+  const dh=Math.round(canvasImg.naturalHeight*scale);
+  canvas.width=dw*dpr;canvas.height=dh*dpr;
+  canvas.style.width=dw+"px";canvas.style.height=dh+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.drawImage(canvasImg,0,0,dw,dh);
+  const d=currentResult;
+  d.boxes.forEach((b,i)=>{
+    const c=color(i);const[x1,y1,x2,y2]=b.pixels;
+    const bx1=x1*scale,by1=y1*scale,bx2=x2*scale,by2=y2*scale;
+    const isHl=hlType==="box"&&hlIdx===i;
+    if(isHl){ctx.fillStyle=c+"25";ctx.fillRect(bx1,by1,bx2-bx1,by2-by1)}
+    ctx.strokeStyle=c;ctx.lineWidth=isHl?4:2;
+    ctx.strokeRect(bx1,by1,bx2-bx1,by2-by1);
+    const label=b.label||("#"+(i+1));
+    ctx.font="bold 12px sans-serif";
+    const tw=ctx.measureText(label).width+10;
+    ctx.fillStyle=c;ctx.fillRect(bx1,Math.max(0,by1-18),tw,18);
+    ctx.fillStyle="#000";ctx.fillText(label,bx1+5,Math.max(12,by1-5));
+  });
+  const off=d.boxes.length;
+  d.points.forEach((p,i)=>{
+    const c=color(off+i);const[x,y]=p.pixels;
+    const px=x*scale,py=y*scale;
+    const isHl=hlType==="point"&&hlIdx===i;
+    const r=isHl?9:6;
+    ctx.strokeStyle=c;ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(px,py,r+3,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle=c;ctx.beginPath();ctx.arc(px,py,r,0,Math.PI*2);ctx.fill();
+    if(p.label){
+      ctx.font="bold 12px sans-serif";
+      const tw=ctx.measureText(p.label).width+10;
+      ctx.fillStyle=c;ctx.fillRect(px+12,py-9,tw,18);
+      ctx.fillStyle="#000";ctx.fillText(p.label,px+17,py+4);
+    }
+  });
+}
+let resizeT;
+window.addEventListener("resize",()=>{clearTimeout(resizeT);resizeT=setTimeout(renderCanvas,200)});
+
+/* ====== 表格行联动高亮 ====== */
+function bindHover(){
+  document.querySelectorAll("tr[data-type][data-idx]").forEach(tr=>{
+    tr.addEventListener("mouseenter",()=>{
+      hlType=tr.dataset.type;hlIdx=+tr.dataset.idx;renderCanvas();
+      document.querySelectorAll("tr.hl").forEach(r=>r.classList.remove("hl"));tr.classList.add("hl");
+    });
+    tr.addEventListener("mouseleave",()=>{
+      hlType="";hlIdx=-1;renderCanvas();tr.classList.remove("hl");
+    });
+  });
+}
+
+/* ====== 渲染结果 ====== */
+function renderResults(data,modelName){
+  $("resultsPlaceholder").style.display="none";
+  $("resultsContent").style.display="block";
+  let h="";
+
+  /* Canvas 标注图 */
+  h+='<div class="result-section">';
+  h+='<h3>标注图像 <span class="badge">'+(data.boxes.length+data.points.length)+' 个结果</span></h3>';
+  h+='<div class="canvas-wrap"><canvas id="resultCanvas"></canvas></div>';
+  h+='<div class="canvas-caption">';
+  h+='<span class="tag">'+data.image_width+'×'+data.image_height+'</span>';
+  h+='<span class="tag">框 '+data.boxes.length+'</span>';
+  h+='<span class="tag">点 '+data.points.length+'</span>';
+  if(modelName)h+='<span class="tag model-tag">'+esc(modelName)+'</span>';
+  h+='<span>悬停表格行可高亮对应标注</span>';
+  h+='</div></div>';
+
+  /* 请求信息 */
+  h+='<div class="result-section"><h3>请求信息</h3><div class="table-wrap"><table><tbody>';
+  h+=`<tr><th>模型</th><td class="mono">${esc(data.model)}</td></tr>`;
+  h+=`<tr><th>模式</th><td class="mono">${esc(data.mode)} — ${MODES[data.mode]?.label||""}</td></tr>`;
+  h+=`<tr><th>生成模式</th><td class="mono">${esc(data.generation_mode)}</td></tr>`;
+  h+=`<tr><th>Prompt</th><td class="mono">${esc(data.prompt)}</td></tr>`;
+  h+='</tbody></table></div></div>';
+
+  /* 检测框 */
+  h+=`<div class="result-section"><h3>检测框 <span class="badge">${data.boxes.length}</span></h3>`;
+  if(data.boxes.length){
+    h+='<div class="table-wrap"><table><thead><tr><th>#</th><th>标签</th><th class="mono">[0,1000]</th><th class="mono">归一化</th><th class="mono">像素</th></tr></thead><tbody>';
+    data.boxes.forEach((b,i)=>{
+      const c=color(i);
+      h+=`<tr data-type="box" data-idx="${i}" style="border-left:3px solid ${c}">`;
+      h+=`<td><span style="color:${c}">●</span> ${i+1}</td>`;
+      h+=`<td>${b.label?esc(b.label):'<span class="empty-hint">—</span>'}</td>`;
+      h+=`<td class="mono">${fmtCoords(b.coordinates_1000)}</td>`;
+      h+=`<td class="mono">${fmtCoords(b.normalized)}</td>`;
+      h+=`<td class="mono">${fmtCoords(b.pixels)}</td>`;
+      h+='</tr>';
+    });
+    h+='</tbody></table></div>';
+  }else{h+='<p class="empty-hint">无检测框</p>'}
+  h+='</div>';
+
+  /* 检测点 */
+  const off=data.boxes.length;
+  h+=`<div class="result-section"><h3>检测点 <span class="badge">${data.points.length}</span></h3>`;
+  if(data.points.length){
+    h+='<div class="table-wrap"><table><thead><tr><th>#</th><th>标签</th><th class="mono">[0,1000]</th><th class="mono">归一化</th><th class="mono">像素</th></tr></thead><tbody>';
+    data.points.forEach((p,i)=>{
+      const c=color(off+i);
+      h+=`<tr data-type="point" data-idx="${i}" style="border-left:3px solid ${c}">`;
+      h+=`<td><span style="color:${c}">●</span> ${i+1}</td>`;
+      h+=`<td>${p.label?esc(p.label):'<span class="empty-hint">—</span>'}</td>`;
+      h+=`<td class="mono">${fmtCoords(p.coordinates_1000)}</td>`;
+      h+=`<td class="mono">${fmtCoords(p.normalized)}</td>`;
+      h+=`<td class="mono">${fmtCoords(p.pixels)}</td>`;
+      h+='</tr>';
+    });
+    h+='</tbody></table></div>';
+  }else{h+='<p class="empty-hint">无检测点</p>'}
+  h+='</div>';
+
+  /* 统计 */
+  if(data.generation_stats){
+    const secs=parseFloat(data.generation_stats.generation_seconds||0);
+    h+='<div class="result-section"><h3>推理统计</h3><div class="stats-grid">';
+    h+=`<div class="stat-card"><div class="k">耗时</div><div class="v">${secs.toFixed(3)} s</div></div>`;
+    h+=`<div class="stat-card"><div class="k">box 数量</div><div class="v">${data.generation_stats.box_count||0}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">检测框</div><div class="v">${data.boxes.length}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">检测点</div><div class="v">${data.points.length}</div></div>`;
+    h+='</div></div>';
+  }
+
+  /* 原始输出 */
+  h+='<div class="result-section"><h3>模型原始输出</h3><div class="raw-output">'+esc(data.raw_output)+'</div></div>';
+
+  $("resultsContent").innerHTML=h;
+  renderCanvas();
+  bindHover();
+  if(window.innerWidth<=980)$("resultsPanel").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+/* ====== 初始化 ====== */
+loadModels().finally(()=>{
+  checkHealth();
+  healthTimer=setInterval(checkHealth,5000);
+});
+onModeChange();onGenModeChange();
+</script>
+</body>
+</html>

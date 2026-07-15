@@ -1,0 +1,9 @@
+{
+  "pascal_voc": {
+    "root": "/absolute/path/to/grasp_anything/datasets/pascal-voc",
+    "annotation": "/absolute/path/to/grasp_anything/training/data/voc_train.jsonl",
+    "repeat_time": 1,
+    "data_augment": false,
+    "visual_prompt": false
+  }
+}

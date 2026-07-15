@@ -1,0 +1,104 @@
+# ============================================================
+# Unified .gitignore for grasp_anything
+# ============================================================
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# ===== Virtual environments =====
+.venv/
+venv/
+env/
+ENV/
+training/.venv/
+
+# ===== Linting / test caches =====
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache/
+.ruff/
+htmlcov/
+.coverage
+.coverage.*
+
+# ===== Environment & secrets =====
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ===== Datasets (large, download separately) =====
+datasets/
+training/data/*.jsonl
+training/data/*_meta.json
+training/data/*_stats.json
+training/data/splits/
+
+# ===== Model checkpoints & training outputs (large, generated) =====
+training/outputs/
+training/logs/
+training/run/
+training/evaluation/
+outputs/
+
+# ===== Downloaded models (large, fetch separately) =====
+models/
+
+# ===== Large binary artifacts =====
+*.safetensors
+*.pt
+*.bin
+*.ckpt
+*.pth
+*.gguf
+*.optimizer
+*.onnx
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+
+# ===== Third-party cloned repos =====
+training/Eagle/
+
+# ===== IDE / Editor =====
+.vscode/browse.vc.db
+.vscode/browse.vc.db-wal
+.vscode/browse.vc.db-shm
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Logs =====
+*.log
+logs/
+training/evaluation/logs/
+
+# ===== Report build artifacts =====
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc
+report/*.fls
+report/*.fdb_latexmk
+report/missfont.log
+report/*.pdf
+report/*.png
+report/.git/
+report/.agents/
+report/.codex/

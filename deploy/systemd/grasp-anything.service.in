@@ -1,0 +1,17 @@
+[Unit]
+Description=grasp_anything language-guided 2D grasp API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_DIR@
+EnvironmentFile=@PROJECT_DIR@/.env
+ExecStart=@PROJECT_DIR@/.venv/bin/grasp-anything serve
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=600
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

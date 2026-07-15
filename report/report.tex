@@ -1,0 +1,383 @@
+% !TeX program = xelatex
+\documentclass[11pt,a4paper]{article}
+
+% ── 中文支持（使用 XeLaTeX 编译）──
+\usepackage[UTF8,fontset=none]{ctex}
+\setCJKmainfont{Noto Serif CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans Mono CJK SC}
+
+% ── 页面与排版 ──
+\usepackage[margin=2.5cm,top=2.8cm,bottom=2.8cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{parskip}
+
+% ── 表格 ──
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{makecell}
+\usepackage{multirow}
+\usepackage{tabularx}
+\usepackage{float}
+
+% ── 颜色与代码 ──
+\usepackage{xcolor}
+\usepackage{graphicx}
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codestr}{RGB}{163,21,21}
+\definecolor{codecom}{RGB}{0,128,0}
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  keywordstyle=\color{codekw}\bfseries,
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecom}\itshape,
+  breaklines=true,
+  breakatwhitespace=true,
+  showstringspaces=false,
+  frame=single,
+  framerule=0pt,
+  framexleftmargin=6pt,
+  framexrightmargin=6pt,
+  framextopmargin=4pt,
+  framexbottommargin=4pt,
+  language=Python,
+  aboveskip=8pt,
+  belowskip=8pt,
+  extendedchars=false,
+}
+
+% ── 引用与链接 ──
+\usepackage[colorlinks=true,linkcolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+
+% ── 标题格式 ──
+\usepackage{titlesec}
+\titleformat{\section}{\Large\bfseries}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.5em}{}
+
+% ── 页眉页脚 ──
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small LocateAnything LoRA Adaptation Report}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── 列表 ──
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=2em}
+
+% ── 数学 ──
+\usepackage{amsmath,amssymb}
+
+% ════════════════════════════════════════════════════════
+\title{\Large\bfseries
+LocateAnything-3B 单卡 LoRA 微调适配报告\\[4pt]
+\normalsize\mdseries RTX 3090 Ti 24GB \,$\cdot$\, Pascal VOC}
+\author{}
+\date{2026 年 7 月}
+
+\begin{document}
+\maketitle
+
+
+% ════════════════ §1 硬件适配 ════════════════
+\section{硬件适配与代码修改}
+
+\subsection{环境差异}
+
+官方训练流程面向 8$\times$H100 80GB + MagiAttention 设计。
+本项目运行在单张 RTX 3090 Ti 24GB（Ampere, sm\_86）上，
+MagiAttention 不支持 Ampere 架构，显存仅为官方单卡的 3/10，
+需要从注意力后端、序列长度、批次配置三个层面进行适配（表~\ref{tab:hw}）。
+
+\begin{table}[H]
+\centering\small
+\caption{官方目标环境与本项目实际环境对比}\label{tab:hw}
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textbf{维度} & \textbf{官方} & \textbf{本项目} \\
+\midrule
+GPU / 架构  & 8$\times$H100 80GB, Hopper & 1$\times$RTX 3090 Ti 24GB, Ampere \\
+注意力后端  & MagiAttention (\texttt{magi}) & PyTorch SDPA \\
+分布式      & torchrun 8 卡 + Slurm + DeepSpeed & 单进程，无 DeepSpeed \\
+序列长度    & 16K--32K tokens & 2K--3K tokens \\
+训练数据    & LocateAnything-Data 138M 查询 & Pascal VOC 42K 样本 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{SDPA 补丁}
+
+官方代码即使命令行传入 \texttt{-{}-attn\_implementation sdpa}，
+模型构建链路中仍有 \textbf{6 处硬编码}会将注意力后端强制覆盖为
+\texttt{flash\_attention\_2} 或 \texttt{magi}，分布在训练脚本
+（config 构建、MoonVit 加载、LLM 加载、模型组装 4 处）、
+模型定义文件（\_\_init\_\_ 1 处）和 launcher 默认值（\texttt{'slurm'}）。
+
+此外，官方 MoonVit 的 \texttt{sdpa\_attention()} 函数对 packed sequence
+存在实现缺陷：构建全序列 $L \times L$ 布尔 mask，导致 $O(L^2)$ 显存开销
+且不同 packed 样本间产生错误的跨段 attention。补丁改为按
+\texttt{cu\_seqlens} 分段，每段独立调用 SDPA，显存降为
+$O(\sum l_i^2)$，同时修正了跨段 attention 的数学错误。
+
+\subsection{训练参数缩减}
+
+\begin{table}[H]
+\centering\small
+\caption{训练参数对比（官方 LoRA 脚本 vs 本项目）}\label{tab:param}
+\begin{tabularx}{\textwidth}{lXXl}
+\toprule
+\textbf{参数} & \textbf{官方 LoRA} & \textbf{本项目} & \textbf{原因} \\
+\midrule
+\texttt{attn\_implementation} & \texttt{magi} & \texttt{sdpa} & 架构限制 \\
+\texttt{nproc\_per\_node}     & 8 & 1 & 单卡 \\
+\texttt{max\_seq\_length}     & 16384 & 2048$\sim$3072 & 显存 \\
+\texttt{packing\_buffer\_size}& 32 & 4 & 显存 \\
+\texttt{gradient\_accum}      & 1 & 16 & 补偿有效 batch \\
+\texttt{use\_llm\_lora}       & 64 & 32 & 降低可训练参数 \\
+\texttt{deepspeed}            & ZeRO Stage 1 & 无 & 单卡不需要 \\
+\texttt{max\_steps}           & 5000 & 2500 (实际 2736) & 数据量小 \\
+\texttt{tf32}                 & 未设置 & True & Ampere 加速 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+% ════════════════ §2 数据集 ════════════════
+\section{Pascal VOC 数据集的划分与使用}
+
+\subsection{官方数据用法}
+
+官方训练数据是 LocateAnything-Data（138M 查询，785M boxes，12M 图），
+覆盖检测、GUI 定位、OCR、指代理解、布局、点定位 6 大任务类型。
+数据以 JSONL + recipe JSON 两级配置，样本为 ShareGPT 对话格式，
+坐标使用 $[0, 1000]$ 离散整数。官方评测使用 Rex-Omni EvalData
+（COCO/LVIS/ScreenSpot-Pro 等）+ DDP 推理 + \texttt{fastevaluate} 库。
+本项目使用 Pascal VOC 2007+2012 训练，VOC2007 test 评测。
+
+\subsection{数据划分}
+
+\begin{table}[H]
+\centering\small
+\caption{数据划分方案}\label{tab:split}
+\begin{tabularx}{\textwidth}{llrr}
+\toprule
+\textbf{数据集} & \textbf{用途} & \textbf{图片数} & \textbf{样本数} \\
+\midrule
+VOC2007 + VOC2012 train & 训练 & 16{,}551 & 42{,}183 \\
+VOC2007 test             & 评测 & 1{,}000 & — \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+VOC2007 test 共 4{,}952 张，固定随机抽取 1{,}000 张（种子 20260711）用于评测。
+
+\subsection{双任务样本生成}
+
+对每张 VOC 图像生成两类训练样本：
+
+\begin{itemize}
+\item \textbf{Detection 样本}（每图 1 条）：prompt 为 ``Detect all objects in \texttt{<image-1>}.'',
+      answer 包含图中全部 GT 目标，坐标格式为 \texttt{<ref>label</ref><box>...}。
+\item \textbf{Grounding 样本}（每图 N 条，N 为图中类别数）：每个类别 1 条，
+      prompt 为 ``Locate all the instances that match the following description: \{label\}.'',
+      answer 只含该类别的目标。
+\end{itemize}
+
+与官方的关键差异：官方检测 prompt 用 \texttt{</c>} 分隔符显式列出全部类别
+（如 ``\texttt{matches: car}\allowbreak\texttt{</c>}\allowbreak\texttt{person}''），
+本项目用 ``Detect all objects'' 不指定类别，
+让模型自由检测全部目标。此外，官方每条标注是独立样本，本项目对同一张图同时生成
+1 条 detection 和 N 条 grounding 样本，使同一图片以不同 prompt 被多次训练，
+相当于隐式数据增强。
+
+共生成 42{,}183 条样本（16{,}551 detection + 25{,}632 grounding），
+47{,}223 个目标框。\texttt{person} 类占 25.2\%，\texttt{sheep} 最少仅 423 条。
+
+\subsection{评测协议差异}
+
+官方在 COCO/LVIS 上每张图发一次查询（所有类别拼在一条 prompt 中），
+用 \texttt{fastevaluate} 计算 AP。本项目对每张图的每个 GT-positive 类别
+分别发一次独立查询，自实现 VOC AP（IoU 0.5--0.95），并只保留与查询类别匹配的预测框。
+这一策略使每次推理只关注单一类别，指标更接近条件定位而非标准检测 AP。
+
+% ════════════════ §3 训练过程 ════════════════
+\section{训练过程与收敛分析}
+
+\subsection{参数冻结策略与可训练模块}
+
+\begin{table}[H]
+\centering\small
+\caption{模型组件的冻结与可训练状态}\label{tab:freeze}
+\begin{tabularx}{\textwidth}{llXl}
+\toprule
+\textbf{组件} & \textbf{状态} & \textbf{配置} & \textbf{与官方差异} \\
+\midrule
+MoonVit 视觉编码器 & 冻结 & \texttt{freeze\_backbone=True}, 无 LoRA & 一致 \\
+LLM backbone 权重  & 冻结 & \texttt{freeze\_llm=True} & 一致 \\
+LLM LoRA 适配器    & 可训练 & \texttt{use\_llm\_lora=32} & rank 64$\to$32 \\
+MLP projector      & 可训练 & \texttt{freeze\_mlp=False}, 2 层 & 一致 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+冻结全部基础参数（vision encoder + LLM backbone），仅训练 LoRA rank 32
+适配器和 2 层 MLP projector。rank 从官方 64 降至 32，配合
+\texttt{gradient\_checkpoint=True} 实现 3072 token 序列下的单卡训练。
+
+\subsection{训练配置}
+
+采用 cosine 学习率策略，warmup 75 步（ratio=0.03），峰值 2$\times$10$^{-5}$，
+2500 步后衰减至 3.85$\times$10$^{-6}$。实际训练至 step 2736，
+\texttt{total\_flos} = $1.245 \times 10^{18}$。
+
+\subsection{Loss 收敛趋势}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{loss_trend.pdf}
+\caption{训练 Loss 与学习率趋势。蓝色实线为平滑后 loss（100 步移动平均），
+红色虚线为学习率（右轴）。}\label{fig:loss}
+\end{figure}
+
+Loss 收敛过程：
+\begin{enumerate}
+\item \textbf{快速下降（step 5--100）}：2.23$\to$0.94，模型迅速学习 VOC 坐标格式。
+\item \textbf{震荡平台（step 100--1800）}：0.83--0.93 波动，grad\_norm 稳定在 0.6--0.8。
+\item \textbf{缓慢收敛（step 1800--2735）}：0.84$\to$0.79，grad\_norm 升至 $\approx$1.0，
+      但 Loss 仅降 0.05，收益递减。
+\end{enumerate}
+
+\begin{table}[H]
+\centering\small
+\caption{Loss 收敛关键里程碑}
+\begin{tabular}{rll}
+\toprule
+\textbf{Step} & \textbf{Loss} & \textbf{Learning Rate} \\
+\midrule
+5    & 2.23 & 1.07\,e-6 \\
+50   & 1.58 & 1.31\,e-5 \\
+100  & 0.94 & 2.00\,e-5 \\
+500  & 0.86 & 1.85\,e-5 \\
+1000 & 0.85 & 1.37\,e-5 \\
+1500 & 0.82 & 7.29\,e-6 \\
+2000 & 0.84 & 3.85\,e-6 \\
+2500 & 0.80 & 3.85\,e-6 \\
+2735 & 0.79 & 3.85\,e-6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Checkpoint 评测与最优选择}
+
+各 checkpoint 在 VOC2007 test 1000 张固定子集上评测（表~\ref{tab:ckpt}），
+干净环境串行运行，官方采样参数。
+
+\begin{table}[H]
+\centering\small
+\caption{各 Checkpoint 评测结果（VOC2007 test 1000 张，干净环境）}
+\label{tab:ckpt}
+\begin{tabularx}{\textwidth}{lccccX}
+\toprule
+\textbf{Checkpoint} & \textbf{mAP50:95} & \textbf{AP50} & \textbf{AP75} & \textbf{F1@IoU50} & \textbf{状态} \\
+\midrule
+官方原模型 & 61.05\% & 80.28\% & 66.75\% & 84.88\% & 基线 \\
+step-1797  & 67.51\% & 88.22\% & 72.77\% & 91.08\% & 权重已删 \\
+step-2000  & \textbf{67.19\%} & \textbf{87.86\%} & \textbf{72.79\%} & \textbf{91.23\%} & 可部署 \\
+step-2736  & 66.71\% & 87.36\% & 72.10\% & 90.98\% & 当前最新 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{itemize}
+\item step-2000 为目前保存的最优可部署 checkpoint：mAP50:95 \textbf{+6.14 pp}（61.05\%$\to$67.19\%），
+      AP50 \textbf{+7.58 pp}（80.28\%$\to$87.86\%）。
+\item 2000$\to$2736 继续训练无收益：mAP50:95 回退 0.48 pp，召回微升但精确率下降，
+      属过拟合信号。
+\item 单类别最大提升：boat +38.6 pp、car +18.1 pp、bottle +17.7 pp、chair +14.7 pp。
+\end{itemize}
+
+\subsection{负向查询幻觉分析}
+
+AP 评测只针对图中存在的类别（GT-positive）发出查询，不衡量模型对不存在类别的
+行为。补充测试发现，当查询图中不存在的类别时，模型存在严重的幻觉问题：
+不返回``未找到''，而是强行输出一个框。
+
+图~\ref{fig:hall-lora} 和图~\ref{fig:hall-base} 展示了 \texttt{ground\_single}
+模式下查询不存在类别时的幻觉行为示例。两张截图分别来自 LoRA 微调模型（step-2736）
+和官方原模型，两者都出现了严重的幻觉。
+
+\begin{figure}[H]
+\centering
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=0.92\linewidth]{hallucination_lora.png}
+\small
+\caption{LoRA 微调模型（step-2736）在 \texttt{ground\_single} 模式下的幻觉示例。
+查询图中不存在的类别时，模型仍然输出了预测框，而非正确拒绝。}\label{fig:hall-lora}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=0.92\linewidth]{hallucination_base.png}
+\small
+\caption{官方原模型在 \texttt{ground\_single} 模式下的幻觉示例。
+同样是查询不存在类别，模型也输出了预测框。}\label{fig:hall-base}
+\end{minipage}
+\end{figure}
+\vspace{-0.8em}
+
+\begin{minipage}{\textwidth}
+测试方法：对 VOC2007 test 1000 张图片，每张随机选一个图中不存在的 VOC 类别，
+分别在 \texttt{ground\_single} 和 \texttt{ground\_multi} 两种模式下查询。
+模型输出有效坐标 = 幻觉，输出 \texttt{None} = 正确拒绝。
+\end{minipage}
+
+\begin{table}[H]
+\centering\small
+\caption{负向查询幻觉率（1000 张，完整测试）}\label{tab:hall}
+\begin{tabularx}{\textwidth}{llccc}
+\toprule
+\textbf{模式} & \textbf{模型} & \textbf{幻觉} & \textbf{正确拒绝} & \textbf{幻觉率} \\
+\midrule
+\texttt{ground\_single} & 官方原模型 & 873 & 127 & 87.3\% \\
+\texttt{ground\_single} & step-2000  & 960 & 40  & 96.0\% \\
+\texttt{ground\_single} & step-2736  & 950 & 50  & 95.0\% \\
+\midrule
+\texttt{ground\_multi}  & 官方原模型 & 32  & 968 & 3.2\% \\
+\texttt{ground\_multi}  & step-2000  & 576 & 424 & 57.6\% \\
+\texttt{ground\_multi}  & step-2736  & 555 & 445 & 55.5\% \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+关键发现：
+
+\begin{enumerate}
+\item \textbf{\texttt{ground\_single} 的幻觉源于训练数据覆盖不足，非模型缺陷}：\\
+      官方预训练数据中 \texttt{ground\_single} 模式的负样本极少，
+      模型未充分学习``目标不存在时输出 None''的行为，导致幻觉率 87.3\%。
+      这属于训练数据设计的疏漏，而非模型架构的 bug。
+
+\item \textbf{LoRA 微调在两种模式下都加剧了幻觉}：\\
+      \texttt{ground\_single} 从 87.3\% 升至 96.0\%，
+      \texttt{ground\_multi} 从 3.2\% 飙升至 57.6\%。
+      根因是我忘记在加入负向的样本了，导致了严重的误框选的幻觉。后续将对训练集进行负向样本添加。
+
+\item \textbf{官方预训练在 \texttt{ground\_multi} 模式上学过拒绝}：
+      官方原模型 \texttt{ground\_multi} 幻觉率仅 3.2\%，
+      说明 LocateAnything-Data 中包含该模式的负样本。
+      但 LoRA 微调后该能力被严重破坏（57.6\%），因为微调数据中
+      没有对应的负样本去维持这一能力。
+
+\item \textbf{继续训练无改善}：step-2000（57.6\%）与 step-2736（55.5\%）
+      基本持平，继续训练不会自行修复幻觉问题。
+\end{enumerate}
+
+
+\end{document}
