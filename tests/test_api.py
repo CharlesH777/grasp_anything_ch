@@ -60,7 +60,14 @@ def test_inference_does_not_block_event_loop(monkeypatch) -> None:
             health_response = await client.get("/healthz")
             assert health_response.status_code == 200
 
-            locate_response = await locate_task
+            # httpx 0.24's in-process transport can stall when re-awaiting a
+            # concurrently completed request task; its result is already final.
+            for _ in range(100):
+                if locate_task.done():
+                    break
+                await asyncio.sleep(0.01)
+            assert locate_task.done()
+            locate_response = locate_task.result()
             assert locate_response.status_code == 200
 
     asyncio.run(scenario())

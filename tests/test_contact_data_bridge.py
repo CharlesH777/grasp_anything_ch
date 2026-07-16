@@ -22,7 +22,14 @@ from eaglevl.train.locany_finetune_magi_stream import (  # noqa: E402
 
 
 class _Tokenizer:
-    ids = {"<box>": 10, "</box>": 11, "<0>": 100, "<1000>": 1100}
+    ids = {
+        "<box>": 10,
+        "</box>": 11,
+        "<grasp>": 12,
+        "</grasp>": 13,
+        "<0>": 100,
+        "<1000>": 1100,
+    }
 
     def convert_tokens_to_ids(self, token):
         return self.ids[token]
@@ -34,6 +41,8 @@ def _dataset() -> LazySupervisedDatasetMTP:
     dataset.block_size = 6
     dataset.task_type = "grasp_contact"
     dataset.max_contact_candidates = 3
+    dataset.contact_collision_threshold = 0.0
+    dataset.contact_outside_threshold = 0.0
     return dataset
 
 
@@ -47,12 +56,12 @@ def test_contact_mtp_mask_marks_only_the_four_coordinate_labels() -> None:
             2,
             3,
             IGNORE_TOKEN_ID,
-            10,
+            12,
             200,
             300,
             400,
             500,
-            11,
+            13,
         ]
     )
 
@@ -73,6 +82,18 @@ def test_contact_mtp_mask_rejects_missing_joint_block() -> None:
         )
 
 
+def test_grasp_end_token_uses_structured_mtp_branch() -> None:
+    source = (
+        EAGLE_ROOT
+        / "eaglevl"
+        / "train"
+        / "locany_finetune_magi_stream.py"
+    ).read_text(encoding="utf-8")
+
+    assert "has_grasp = (input_ids == grasp_end_id).any().item()" in source
+    assert "if not (has_box or has_ref or has_grasp):" in source
+
+
 def test_contact_fields_are_fixed_shape_and_keep_collision_unknown() -> None:
     dataset = _dataset()
     fields = dataset._contact_fields(
@@ -87,20 +108,43 @@ def test_contact_fields_are_fixed_shape_and_keep_collision_unknown() -> None:
             "conversations": [
                 {
                     "from": "gpt",
-                    "value": "<box><100><200><300><400></box>",
+                    "value": "<grasp><100><200><300><400></grasp>",
                 }
             ],
         }
     )
 
     assert fields["contact_candidates"].shape == (1, 3, 4)
-    assert fields["contact_candidate_mask"].tolist() == [[True, True, False]]
+    assert fields["contact_candidate_mask"].tolist() == [[True, False, False]]
     assert fields["contact_positive_mask"].tolist() == [True]
     assert fields["collision_valid"].tolist() == [False]
     assert torch.isnan(fields["candidate_collision_2d"][0, 2])
     assert fields["candidate_outside_2d"][0, :2].tolist() == pytest.approx(
         [0.0, 0.1]
     )
+
+
+def test_contact_fields_skip_unsafe_primary_at_training_threshold() -> None:
+    dataset = _dataset()
+
+    with pytest.raises(ValueError, match="target is unsafe"):
+        dataset._contact_fields(
+            {
+                "task_type": "grasp_contact",
+                "image_width": 640,
+                "image_height": 480,
+                "contact_candidates": [[100, 200, 300, 400]],
+                "candidate_collision_2d": [0.0],
+                "candidate_outside_2d": [0.01],
+                "collision_valid": False,
+                "conversations": [
+                    {
+                        "from": "gpt",
+                        "value": "<grasp><100><200><300><400></grasp>",
+                    }
+                ],
+            }
+        )
 
 
 def test_packed_collator_preserves_contact_rows_and_label_alignment() -> None:
@@ -195,6 +239,41 @@ def test_accumulation_window_counts_are_shared_with_every_microbatch() -> None:
         assert batch["geometry_loss_scale"].item() == pytest.approx(0.5)
 
 
+def test_accumulation_ce_denominator_includes_pair_owned_coordinates() -> None:
+    trainer = StreamPackingMTPTrainer.__new__(StreamPackingMTPTrainer)
+    trainer.args = SimpleNamespace(
+        average_tokens_across_devices=True, world_size=1
+    )
+    trainer.accelerator = _Accelerator()
+    trainer.model = SimpleNamespace(
+        config=SimpleNamespace(
+            contact_loss_enabled=True,
+            contact_geometry_start_blocks=0,
+            contact_geometry_ramp_blocks=1,
+        )
+    )
+    trainer._seen_contact_blocks = 0
+    batch = {
+        "labels": torch.tensor([[IGNORE_TOKEN_ID, 1, 2, 3, 4, 5, 6]]),
+        "sub_sample_lengths": [torch.tensor([7])],
+        "contact_mtp_coord_mask": torch.tensor(
+            [[False, False, True, True, True, True, False]]
+        ),
+        "contact_positive_mask": torch.tensor([True]),
+        "collision_valid": torch.tensor([False]),
+        "contact_task_code": torch.tensor([1]),
+    }
+
+    batches, ce_count = trainer.get_batch_samples(
+        iter((batch,)), num_batches=1, device=torch.device("cpu")
+    )
+
+    # Pair loss replaces the four coordinate CEs in the numerator, but those
+    # labels stay in the token denominator so enabling pair does not jump scale.
+    assert ce_count.item() == 6
+    assert batches[0]["global_ce_tokens_in_window"].item() == 6
+
+
 def test_checkpoint_export_installs_remote_code_and_auto_map(
     tmp_path: Path,
 ) -> None:
@@ -209,4 +288,84 @@ def test_checkpoint_export_installs_remote_code_and_auto_map(
     )
     assert (checkpoint / "modeling_locateanything.py").is_file()
     assert (checkpoint / "generate_utils.py").is_file()
+    assert (checkpoint / "grasp_adapter_utils.py").is_file()
+    exported_model_source = (checkpoint / "modeling_locateanything.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from .grasp_adapter_utils import" in exported_model_source
+    assert "eaglevl.train.grasp_contact" not in exported_model_source
     assert config["auto_map"]["AutoModel"].startswith("modeling_locateanything")
+
+
+def test_coordinate_metrics_are_aggregated_over_the_same_logging_window() -> None:
+    trainer = StreamPackingMTPTrainer.__new__(StreamPackingMTPTrainer)
+    trainer._coordinate_metric_window = None
+
+    trainer._accumulate_coordinate_metrics({
+        "coordinate_ce_sum": torch.tensor(8.0),
+        "coordinate_top1_correct": torch.tensor(2),
+        "coordinate_token_count": torch.tensor(4),
+    })
+    trainer._accumulate_coordinate_metrics({
+        "coordinate_ce_sum": torch.tensor(4.0),
+        "coordinate_top1_correct": torch.tensor(3),
+        "coordinate_token_count": torch.tensor(4),
+    })
+
+    metrics = trainer._consume_coordinate_metrics()
+
+    assert metrics["contact/coordinate_ce"] == pytest.approx(1.5)
+    assert metrics["contact/coordinate_top1_accuracy"] == pytest.approx(0.625)
+    assert trainer._consume_coordinate_metrics() == {}
+
+
+def test_loss_breakdown_uses_field_specific_distributed_reductions() -> None:
+    assert (
+        StreamPackingMTPTrainer._breakdown_reduce_op("loss_total")
+        == torch.distributed.ReduceOp.SUM
+    )
+    assert (
+        StreamPackingMTPTrainer._breakdown_reduce_op("coord_mass_min")
+        == torch.distributed.ReduceOp.MIN
+    )
+    assert (
+        StreamPackingMTPTrainer._breakdown_reduce_op("coord_entropy_max")
+        == torch.distributed.ReduceOp.MAX
+    )
+
+
+def test_loss_breakdown_aggregates_microbatches_per_optimizer_window() -> None:
+    trainer = StreamPackingMTPTrainer.__new__(StreamPackingMTPTrainer)
+    trainer._loss_breakdown_window = {}
+    trainer._loss_breakdown_steps = set()
+
+    trainer._accumulate_loss_breakdown(
+        {
+            "loss_total": torch.tensor(0.4),
+            "base_loss_sum": torch.tensor(8.0),
+            "coord_mass_min": torch.tensor(0.7),
+        },
+        optimizer_step=10,
+    )
+    trainer._accumulate_loss_breakdown(
+        {
+            "loss_total": torch.tensor(0.6),
+            "base_loss_sum": torch.tensor(12.0),
+            "coord_mass_min": torch.tensor(0.5),
+        },
+        optimizer_step=10,
+    )
+    trainer._accumulate_loss_breakdown(
+        {
+            "loss_total": torch.tensor(2.0),
+            "base_loss_sum": torch.tensor(30.0),
+            "coord_mass_min": torch.tensor(0.8),
+        },
+        optimizer_step=11,
+    )
+
+    logs = trainer._consume_loss_breakdown()
+
+    assert logs["contact/loss_total"] == pytest.approx(1.5)
+    assert logs["contact/base_loss_sum"] == pytest.approx(25.0)
+    assert logs["contact/coord_mass_min"] == pytest.approx(0.5)

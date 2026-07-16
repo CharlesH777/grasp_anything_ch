@@ -14,6 +14,7 @@ dist/
 
 # ===== Virtual environments =====
 .venv/
+.eval-venv/
 venv/
 env/
 ENV/

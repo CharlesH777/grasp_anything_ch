@@ -29,7 +29,7 @@ def test_grasp_contact_prompt_is_structured_and_has_no_cot() -> None:
     prompt = build_prompt("the red cup", "grasp_contact")
 
     assert prompt == (
-        "Predict one stable two-finger grasp contact pair for the target "
+        "Predict one plausible two-finger 2D contact pair for the target "
         "described as: the red cup."
     )
     assert "think" not in prompt.lower()

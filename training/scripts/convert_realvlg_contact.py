@@ -44,6 +44,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--split", choices=("all", *SPLIT_RANGES), default="all"
     )
+    parser.add_argument("--scene-start", type=int)
+    parser.add_argument("--scene-end-exclusive", type=int)
     parser.add_argument("--camera")
     parser.add_argument(
         "--official-graspnet-eval",
@@ -63,6 +65,14 @@ def parse_args() -> argparse.Namespace:
         "--collision-masks-exhaustive",
         action="store_true",
         help="Only enable when metadata contains every obstacle instance.",
+    )
+    parser.add_argument(
+        "--grasp-candidates-exhaustive",
+        action="store_true",
+        help=(
+            "Allow all reliably unsafe candidates to produce a no-grasp label; "
+            "requires exhaustive obstacle masks and grasp annotations."
+        ),
     )
     parser.add_argument("--derived-mask-dir", type=Path)
     return parser.parse_args()
@@ -264,10 +274,22 @@ def _load_records(
     split: str,
     camera: str | None,
     official_graspnet_eval: bool = False,
+    scene_start: int | None = None,
+    scene_end_exclusive: int | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    record_keys: dict[tuple[Path, str], dict[str, Any]] = {}
     for metadata_path in sorted(metadata_dir.rglob("*.json")):
         if not _matches_split(metadata_path, split):
+            continue
+        scene_id = _scene_id(metadata_path)
+        if scene_start is not None and (
+            scene_id is None or scene_id < scene_start
+        ):
+            continue
+        if scene_end_exclusive is not None and (
+            scene_id is None or scene_id >= scene_end_exclusive
+        ):
             continue
         if camera and camera not in metadata_path.parts:
             continue
@@ -276,19 +298,34 @@ def _load_records(
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
         if not isinstance(payload, list):
             continue
-        for object_data in payload:
+        for object_index, object_data in enumerate(payload):
             if not isinstance(object_data, dict):
                 continue
             image_path = _resolve_data_path(data_root, object_data.get("image_path"))
             if image_path is None:
                 continue
-            records.append(
-                {
-                    "metadata_path": metadata_path,
-                    "image_path": image_path,
-                    "object": object_data,
-                }
+            object_id = object_data.get("object_id")
+            identity = (
+                str(object_id)
+                if object_id is not None
+                else f"{metadata_path}:{object_index}"
             )
+            key = (image_path, identity)
+            existing = record_keys.get(key)
+            if existing is not None:
+                if existing["object"] != object_data:
+                    raise ValueError(
+                        "conflicting duplicate metadata for image/object: "
+                        f"{image_path} / {identity}"
+                    )
+                continue
+            record = {
+                "metadata_path": metadata_path,
+                "image_path": image_path,
+                "object": object_data,
+            }
+            record_keys[key] = record
+            records.append(record)
     return records
 
 
@@ -308,11 +345,27 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("collision_threshold must be in [0, 1]")
     if not 0.0 <= outside_threshold <= 1.0:
         raise ValueError("outside_threshold must be in [0, 1]")
+    grasp_candidates_exhaustive = bool(
+        getattr(args, "grasp_candidates_exhaustive", False)
+    )
+    if grasp_candidates_exhaustive and not args.collision_masks_exhaustive:
+        raise ValueError(
+            "--grasp-candidates-exhaustive requires "
+            "--collision-masks-exhaustive"
+        )
     dataset_name = args.dataset_name or data_root.name
 
     official_graspnet_eval = bool(
         getattr(args, "official_graspnet_eval", False)
     )
+    scene_start = getattr(args, "scene_start", None)
+    scene_end_exclusive = getattr(args, "scene_end_exclusive", None)
+    if (scene_start is None) != (scene_end_exclusive is None):
+        raise ValueError(
+            "--scene-start and --scene-end-exclusive must be used together"
+        )
+    if scene_start is not None and scene_start >= scene_end_exclusive:
+        raise ValueError("scene range must be non-empty")
     camera = args.camera
     if official_graspnet_eval:
         if args.split not in {"seen", "similar", "novel"}:
@@ -331,6 +384,8 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
         args.split,
         camera,
         official_graspnet_eval=official_graspnet_eval,
+        scene_start=scene_start,
+        scene_end_exclusive=scene_end_exclusive,
     )
     grouped: dict[Path, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
@@ -354,8 +409,18 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             if not image_path.is_file():
                 stats["missing_images"] += len(group)
                 continue
-            with Image.open(image_path) as source:
-                width, height = source.size
+            raw_size = group[0]["object"].get("image_size_hw")
+            if (
+                isinstance(raw_size, list | tuple)
+                and len(raw_size) == 2
+                and all(isinstance(value, int | float) and value > 0 for value in raw_size)
+            ):
+                height, width = (int(raw_size[0]), int(raw_size[1]))
+                stats["images_sized_from_metadata"] += 1
+            else:
+                with Image.open(image_path) as source:
+                    width, height = source.size
+                stats["images_sized_from_file"] += 1
             stats["images"] += 1
 
             for target_index, entry in enumerate(group):
@@ -380,18 +445,12 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                 if not candidates:
                     stats["objects_without_valid_contacts"] += 1
                     continue
-                selected_pixels = _iou_medoid_and_fps(
-                    candidates,
-                    args.max_candidates,
-                    args.rectangle_thickness,
-                )
-
-                quantized: list[tuple[int, int, int, int]] = []
-                selected_pixels_after_quantization: list[
+                all_quantized: list[tuple[int, int, int, int]] = []
+                all_pixels_after_quantization: list[
                     tuple[float, float, float, float]
                 ] = []
                 seen_quantized: set[tuple[int, int, int, int]] = set()
-                for pixel_candidate in selected_pixels:
+                for pixel_candidate in candidates:
                     token_candidate = _quantize(pixel_candidate, width, height)
                     if token_candidate in seen_quantized:
                         filter_reasons["quantized_duplicate"] += 1
@@ -400,19 +459,19 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                         filter_reasons["quantized_degenerate"] += 1
                         continue
                     seen_quantized.add(token_candidate)
-                    quantized.append(token_candidate)
-                    selected_pixels_after_quantization.append(pixel_candidate)
-                if not quantized:
+                    all_quantized.append(token_candidate)
+                    all_pixels_after_quantization.append(pixel_candidate)
+                if not all_quantized:
                     stats["objects_degenerate_after_quantization"] += 1
                     continue
 
                 collision_valid = False
                 collision_detail = "instance masks not declared exhaustive"
                 obstacle_path: Path | None = None
-                collision_scores = [0.0] * len(quantized)
+                collision_scores = [0.0] * len(all_quantized)
                 outside_scores: list[float] = []
                 continuous_geometries = []
-                for candidate in selected_pixels_after_quantization:
+                for candidate in all_pixels_after_quantization:
                     x1, y1, x2, y2 = candidate
                     continuous_token_candidate = (
                         x1 * 1000.0 / width,
@@ -464,19 +523,81 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                             )
                             collision_scores.append(collision.collision_ratio or 0.0)
 
+                safe_indices = [
+                    index
+                    for index in range(len(all_quantized))
+                    if outside_scores[index] <= outside_threshold
+                    and (
+                        not collision_valid
+                        or collision_scores[index] <= args.collision_threshold
+                    )
+                ]
+                has_safe_candidate = bool(safe_indices)
+                if not has_safe_candidate and official_graspnet_eval:
+                    stats["official_samples_without_safe_training_candidate"] += 1
+                elif not has_safe_candidate and not grasp_candidates_exhaustive:
+                    stats["objects_without_safe_annotated_candidate"] += 1
+                    continue
+
+                no_safe_candidate = (
+                    not has_safe_candidate and not official_graspnet_eval
+                )
+                if no_safe_candidate:
+                    quantized: list[tuple[int, int, int, int]] = []
+                    selected_pixels_after_quantization = (
+                        all_pixels_after_quantization
+                    )
+                else:
+                    selectable_indices = safe_indices or list(
+                        range(len(all_quantized))
+                    )
+                    selectable_pixels = [
+                        all_pixels_after_quantization[index]
+                        for index in selectable_indices
+                    ]
+                    selected_pixels = _iou_medoid_and_fps(
+                        selectable_pixels,
+                        args.max_candidates,
+                        args.rectangle_thickness,
+                    )
+                    selected_indices = [
+                        selectable_indices[selectable_pixels.index(candidate)]
+                        for candidate in selected_pixels
+                    ]
+                    quantized = [all_quantized[index] for index in selected_indices]
+                    selected_pixels_after_quantization = [
+                        all_pixels_after_quantization[index]
+                        for index in selected_indices
+                    ]
+                    collision_scores = [
+                        collision_scores[index] for index in selected_indices
+                    ]
+                    outside_scores = [
+                        outside_scores[index] for index in selected_indices
+                    ]
+
                 sample_id = _sample_id(
                     dataset_name,
                     entry["metadata_path"],
                     image_path,
                     obj.get("object_id", target_index),
                 )
-                primary = quantized[0]
-                answer = "".join(f"<{value}>" for value in primary)
+                if no_safe_candidate:
+                    sample_task_type = "grasp_contact_negative"
+                    answer_markup = "<grasp>none</grasp>"
+                else:
+                    primary = quantized[0]
+                    answer = "".join(f"<{value}>" for value in primary)
+                    sample_task_type = "grasp_contact"
+                    answer_markup = f"<grasp>{answer}</grasp>"
                 target_mask = _resolve_data_path(data_root, obj.get("mask_path"))
                 sample = {
                     "sample_id": sample_id,
                     "dataset": dataset_name,
-                    "task_type": "grasp_contact",
+                    "task_type": sample_task_type,
+                    "negative_reason": (
+                        "ungraspable" if no_safe_candidate else None
+                    ),
                     "image_width": width,
                     "image_height": height,
                     "contact_candidates": [list(candidate) for candidate in quantized],
@@ -498,14 +619,14 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                         {
                             "from": "human",
                             "value": (
-                                "Predict one stable two-finger grasp contact pair "
+                                "Predict one plausible two-finger 2D contact pair "
                                 f"for the target described as: {description}."
                             ),
                         },
                         {
                             "from": "gpt",
                             "value": (
-                                f"<ref>grasp</ref><box>{answer}</box>"
+                                f"<ref>grasp</ref>{answer_markup}"
                             ),
                         },
                     ],
@@ -525,9 +646,16 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                         if official_graspnet_eval
                         else None
                     ),
+                    "evaluation_only": official_graspnet_eval,
                 }
+                if official_graspnet_eval:
+                    sample["evaluation_contact_candidates_pixels"] = [
+                        list(candidate) for candidate in candidates
+                    ]
+                    stats["evaluation_gt_candidates"] += len(candidates)
                 output_handle.write(json.dumps(sample, ensure_ascii=False) + "\n")
-                stats["positive_samples"] += 1
+                stats["positive_samples"] += int(not no_safe_candidate)
+                stats["negative_samples"] += int(no_safe_candidate)
                 stats["selected_candidates"] += len(quantized)
                 if collision_valid:
                     stats["collision_valid_samples"] += 1
@@ -547,6 +675,9 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             "rectangle_thickness": args.rectangle_thickness,
             "outside_threshold": outside_threshold,
             "collision_masks_exhaustive": args.collision_masks_exhaustive,
+            "grasp_candidates_exhaustive": grasp_candidates_exhaustive,
+            "scene_start": scene_start,
+            "scene_end_exclusive": scene_end_exclusive,
         },
     }
     if args.stats:

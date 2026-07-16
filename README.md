@@ -3,10 +3,10 @@
 `grasp_anything` 是一个基于 NVIDIA `LocateAnything-3B` 的语言引导二维抓取项目。输入 RGB 图像和自然语言目标描述，模型通过一次 PBD 联合生成两个平行夹爪接触点：
 
 ```text
-<ref>grasp</ref><box><x1><y1><x2><y2></box>
+<ref>grasp</ref><grasp><x1><y1><x2><y2></grasp>
 ```
 
-模型不直接预测存在周期歧义的角度和宽度。抓取中心、夹爪方向（模 `pi`）和开口宽度全部由两个接触点确定性计算；二维实例 mask 用于碰撞率、越界率和 clearance 评估。
+模型不直接预测存在周期歧义的角度和宽度。二维中心、接触点闭合轴方向（模 `pi`）和像素开口全部由两个接触点确定性计算；二维实例 mask 仅用于投影碰撞率、越界率和 clearance 代理评估。
 
 上游模型、remote-code 类名和 `LOCATE_*` 环境变量保留 LocateAnything 命名。本项目的发行名、CLI、API/UI、Docker 和 systemd 服务统一使用 `grasp_anything` / `grasp-anything`。
 
@@ -17,13 +17,16 @@
 - `grasp_contact` 服务模式，一次输出一个四坐标接触点块或 `none`。
 - contact-aware Fast/Hybrid PBD 联合解码，不再调用两次 `point`。
 - 端点交换不变 pair CE、多 GT hard-min、中心/角度/宽度辅助损失。
-- 平滑的 `1-cos^2` 模 `pi` 角度损失和几何置信度门控。
-- fixed-K stream-packing 数据桥、全局 denominator 和梯度累积对齐。
+- 带 90 度确定性非零次梯度的 `1-|cos|` 模 `pi` 角度损失和几何置信度门控。
+- fixed-K stream-packing 数据桥、rank/worker 互斥分片、全局 denominator 和梯度累积对齐。
+- grasp 输出 adapter 在训练和推理的所有位置使用同一 logits 修正；错误槽位也有负梯度。
+- 独立记录坐标 CE 与 top-1 accuracy，不再用总 token loss 代替坐标收敛判断。
 - RealVLG-R1 `contact_points` 转换、候选压缩、碰撞与越界候选过滤。
 - 严格二维评测：非法正样本计零、修正角度指标、碰撞 unknown 单列。
 - 每个 checkpoint 自动带推理 remote code 和 `auto_map`。
-- 四卡 BF16 + SDPA + ZeRO-2 分阶段训练，显式禁用 LoRA。
+- 四卡 BF16 + SDPA + ZeRO-2 分阶段训练，LLM 使用 LoRA。
 - 全新 Eagle checkout 启动训练时自动校验并应用 contact patch。
+- Phase 2 起强制检查 grounding replay，negative/multigt 阶段额外检查可信负样本。
 
 仍需在训练服务器上完成的数据验收包括：RealVLG 全量审计、200 张可视化抽检、64 样本过拟合、四卡保存/恢复和 seen/similar/novel 正式评测。
 
@@ -32,7 +35,7 @@
 ### 正样本
 
 ```text
-<ref>grasp</ref><box><100><420><760><510></box>
+<ref>grasp</ref><grasp><100><420><760><510></grasp>
 ```
 
 四个坐标都是 `[0,1000]` 离散 token，槽位顺序固定为 `(x1,y1,x2,y2)`。端点在数据转换时使用字典序规范化，训练损失和评测误差对端点交换保持不变。
@@ -40,10 +43,10 @@
 ### 负样本
 
 ```text
-<ref>grasp</ref><box>none</box>
+<ref>grasp</ref><grasp>none</grasp>
 ```
 
-只有数据明确证明目标不存在或不可抓取时才能生成 `none`。缺少接触点、mask 不完整或候选全部碰撞不能自动当作负样本。
+只有数据明确证明目标不存在或不可抓取时才能生成 `none`。缺少接触点、mask 不完整或非穷尽候选全部碰撞不能自动当作负样本。
 
 ### 二维几何
 
@@ -52,10 +55,10 @@
 ```text
 center = (p1 + p2) / 2
 opening_width = ||p2 - p1||
-direction = atan2(y2-y1, x2-x1) mod pi
+closing_axis_direction = atan2(y2-y1, x2-x1) mod pi
 ```
 
-角度和宽度必须在原图像素空间计算，不能直接在归一化的正方形 token 网格中计算。
+角度和宽度必须在原图像素空间计算，不能直接在归一化的正方形 token 网格中计算。这里的宽度是像素距离，不是毫米/米制夹爪开口；项目不输出 6-DoF 姿态。
 
 ## 数据集与划分
 
@@ -96,7 +99,7 @@ python training/scripts/convert_realvlg_contact.py \
   --split train --camera kinect --max-candidates 8
 ```
 
-只有确认 metadata 覆盖同图全部实例 mask 后才能加入 `--collision-masks-exhaustive`。否则碰撞状态保留为 `unknown`，不能把未标注区域视为空闲。
+只有确认 metadata 覆盖同图全部实例 mask 后才能加入 `--collision-masks-exhaustive`。否则碰撞状态保留为 `unknown`，不能把未标注区域视为空闲。只有进一步确认接触点标注穷尽了当前夹爪约束下的可行候选，才可同时加入 `--grasp-candidates-exhaustive`；此时全不安全候选才会转换成 `ungraspable`，否则转换器跳过该对象。
 
 ### 转换官方评测集
 
@@ -109,21 +112,25 @@ for split in seen similar novel; do
 done
 ```
 
+官方转换会在 `evaluation_contact_candidates_pixels` 中保留全部有效原始 GT；`--max-candidates` 只控制样本内的代表候选，不影响 evaluator 分母或最大 IoU 搜索。
+
 训练和评测必须按 scene 划分，禁止按 JSON 行或相邻帧随机切分。
 
 ## 训练方案
 
-当前主线不是 LoRA，而是部分全参数微调：
+当前主线冻结视觉与 LLM 基座，在 LLM attention/MLP 上训练 LoRA，
+同时全参数训练视觉到语言的 MLP connector：
 
 | 模块 | 状态 |
 |---|---|
 | vision backbone | 冻结 |
-| language model | 全参数训练 |
-| token embedding / LM head | 全参数训练 |
+| language model base | 冻结 |
+| LLM attention/MLP | LoRA rank 32，alpha 64，dropout 0.05 |
+| token embedding / LM head | 基础权重冻结；仅训练 `<grasp>`、`</grasp>` 的两个 `2 x hidden_size` 输入/输出 delta |
 | multimodal MLP connector | 全参数训练 |
-| LLM / vision LoRA | 关闭 |
+| vision LoRA | 关闭 |
 
-默认使用 4 张 RTX 3090/4090、BF16、SDPA、gradient checkpointing 和 ZeRO-2。ZeRO-2 是优化器/梯度分片，不是 LoRA。
+默认使用 4 张 RTX 3090/4090、BF16、SDPA、gradient checkpointing 和 ZeRO-2。LoRA target 为 LLM 的 `q/k/v/o_proj` 与 `gate/up/down_proj`，各阶段保持相同 rank 以保证 checkpoint 兼容。
 
 ### 训练 meta
 
@@ -136,6 +143,7 @@ grounding replay  20%
 ```
 
 第一轮没有可靠负样本时使用 `80% contact positive + 20% grounding replay`，不要伪造 `none`。
+这些比例只由 meta 中各数据集的显式 `sampling_weight` 控制，不存在同名环境变量。SFT 默认门禁要求至少 1000 个 contact 样本且 contact/replay 权重至少 70%/15%；negative/multigt 再要求可信负样本至少 1%。小规模 smoke 必须显式降低 `CONTACT_MIN_FULL_SAMPLES`，不能靠改文件名伪装全量数据。
 
 ### 分阶段训练
 
@@ -144,11 +152,12 @@ Phase 1  64 样本格式过拟合
 Phase 2  单候选普通 SFT
 Phase 3  交换不变 pair loss
 Phase 4  center/angle/width 几何辅助损失
-Phase 5  multi-GT 和可靠负样本
-Phase 6  经审计的二维碰撞约束
+Phase 5a  单候选 geometry + 可靠负样本
+Phase 5b  保持负样本配比，开启 multi-GT
+Phase 6   经审计的二维碰撞约束
 ```
 
-每个阶段先通过固定验证门槛，再进入下一阶段。跨阶段使用上一阶段最佳 checkpoint 作为新的 `MODEL_PATH`，但使用全新的 optimizer/scheduler；`RESUME_FROM_CHECKPOINT` 只用于同一阶段中断恢复。
+每个阶段先通过固定验证门槛，再进入下一阶段。跨阶段使用上一阶段最佳 checkpoint 作为新的 `MODEL_PATH`，但使用全新的 optimizer/scheduler；`RESUME_FROM_CHECKPOINT` 只用于 phase、数据指纹和 worker topology 都一致的同阶段中断恢复。启动脚本会检查真实 LoRA/task-adapter 权重、trainer state 和 `phase_acceptance.json`，拒绝只修改 config 的伪 checkpoint 或 overfit64 meta 进入 `sft/pair/geometry/negative/multigt`。
 
 ### 启动
 
@@ -172,7 +181,7 @@ bash training/scripts/train_realvlg_contact.sh
 
 ```bash
 python training/scripts/evaluate_realvlg_contact.py \
-  --annotations /data/grasp_anything/contact_seen.jsonl \
+  --annotations /data/grasp_anything/contact_seen_grasp_v2.jsonl \
   --data-root /data/GraspNet_VLG \
   --model-path /models/grasp-anything-checkpoint \
   --output /tmp/grasp_predictions.jsonl \
@@ -284,4 +293,4 @@ git -C training/Eagle apply --reverse --check \
   ../patches/locateanything-grasp-contact.patch
 ```
 
-详细损失、DDP reduction、碰撞协议、风险和消融计划见 [`GRASP_CONTACT_README.md`](GRASP_CONTACT_README.md)。`training/README.md` 和 `report/` 中的 VOC LoRA 内容属于历史实验，不是当前抓取训练主线。
+详细损失、DDP reduction、碰撞协议、风险和消融计划见 [`GRASP_CONTACT_README.md`](GRASP_CONTACT_README.md)。`training/README.md` 和 `report/` 中的 VOC 数据与旧超参数属于历史实验，不是当前抓取训练主线。

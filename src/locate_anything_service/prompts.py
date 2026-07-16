@@ -49,7 +49,7 @@ def build_prompt(query: str, mode: PromptMode = "ground_single") -> str:
         return f"Point to: {cleaned}."
     if mode == "grasp_contact":
         return (
-            "Predict one stable two-finger grasp contact pair for the target "
+            "Predict one plausible two-finger 2D contact pair for the target "
             f"described as: {cleaned}."
         )
     raise ValueError(f"unsupported mode: {mode}")

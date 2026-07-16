@@ -36,7 +36,7 @@ def test_coordinate_one_uses_thousand_point_scale() -> None:
 
 
 def test_parse_grasp_uses_x1_y1_x2_y2_slot_order() -> None:
-    output = "<ref>grasp</ref><box><100><250><700><900></box>"
+    output = "<ref>grasp</ref><grasp><100><250><700><900></grasp>"
     parsed = parse_grasp_output(output, image_width=2000, image_height=1000)
 
     assert parsed.status == "ok"
@@ -51,7 +51,7 @@ def test_parse_grasp_uses_x1_y1_x2_y2_slot_order() -> None:
 
 
 def test_parse_grasp_none_is_distinct_from_invalid() -> None:
-    none_result = parse_grasp_output("<box>none</box>", 640, 480)
+    none_result = parse_grasp_output("<grasp>none</grasp>", 640, 480)
     invalid_result = parse_grasp_output("no geometry", 640, 480)
 
     assert none_result.status == "none"
@@ -62,22 +62,34 @@ def test_parse_grasp_none_is_distinct_from_invalid() -> None:
 
 def test_parse_grasp_rejects_multiple_or_mixed_blocks() -> None:
     multiple = parse_grasp_output(
-        "<box><1><2><3><4></box><box><5><6><7><8></box>", 100, 100
+        "<grasp><1><2><3><4></grasp><grasp><5><6><7><8></grasp>",
+        100,
+        100,
     )
     mixed = parse_grasp_output(
-        "<box>none</box><box><5><6><7><8></box>", 100, 100
+        "<grasp>none</grasp><grasp><5><6><7><8></grasp>", 100, 100
     )
 
     assert multiple.status == "invalid"
     assert mixed.status == "invalid"
 
 
+def test_parse_grasp_rejects_legacy_box_and_trailing_coordinates() -> None:
+    legacy = parse_grasp_output("<box><1><2><3><4></box>", 100, 100)
+    trailing = parse_grasp_output(
+        "<ref>grasp</ref><grasp><1><2><3><4></grasp><500>", 100, 100
+    )
+
+    assert legacy.status == "invalid"
+    assert trailing.status == "invalid"
+
+
 def test_parse_grasp_rejects_out_of_range_and_coincident_contacts() -> None:
     out_of_range = parse_grasp_output(
-        "<box><-1><2><3><4></box>", 100, 100
+        "<grasp><-1><2><3><4></grasp>", 100, 100
     )
     coincident = parse_grasp_output(
-        "<box><10><20><10><20></box>", 100, 100
+        "<grasp><10><20><10><20></grasp>", 100, 100
     )
 
     assert out_of_range.status == "invalid"

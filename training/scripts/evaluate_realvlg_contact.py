@@ -20,6 +20,8 @@ from locate_anything_service.grasp_geometry import (  # noqa: E402
     angular_error_degrees,
     derive_grasp_geometry,
     grasp_rectangle,
+    polygon_area,
+    polygon_inside_image_area,
     polygon_iou,
 )
 from locate_anything_service.parser import parse_grasp_output  # noqa: E402
@@ -107,6 +109,31 @@ def _swap_invariant_endpoint_error(
     return min(identity, swapped)
 
 
+def _metric_summary(values: list[float]) -> dict[str, float | int | None]:
+    if not values:
+        return {"count": 0, "mean": None, "median": None, "p95": None, "max": None}
+    ordered = sorted(float(value) for value in values)
+    middle = len(ordered) // 2
+    median = (
+        ordered[middle]
+        if len(ordered) % 2
+        else 0.5 * (ordered[middle - 1] + ordered[middle])
+    )
+    position = 0.95 * (len(ordered) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    p95 = ordered[lower] + (ordered[upper] - ordered[lower]) * (
+        position - lower
+    )
+    return {
+        "count": len(ordered),
+        "mean": sum(ordered) / len(ordered),
+        "median": median,
+        "p95": p95,
+        "max": ordered[-1],
+    }
+
+
 def _decode_output(output: Any, input_ids: Any, processor: Any) -> str:
     if isinstance(output, tuple):
         output = output[0]
@@ -158,7 +185,7 @@ class ModelPredictor:
         with Image.open(image_path) as source:
             image = source.convert("RGB")
         prompt = (
-            "Predict one stable two-finger grasp contact pair for the target "
+            "Predict one plausible two-finger 2D contact pair for the target "
             f"described as: {description}."
         )
         messages = [
@@ -250,6 +277,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     collision_valid_count = collision_count = collision_unknown_count = 0
     collision_aware_correct = 0
     collision_ratio_sum = outside_ratio_sum = 0.0
+    endpoint_errors: list[float] = []
+    angle_errors: list[float] = []
+    center_errors: list[float] = []
+    width_errors: list[float] = []
+    geometric_outside_ratios: list[float] = []
+    geometric_outside_count = 0
 
     for annotation in annotations:
         sample_id = annotation["sample_id"]
@@ -312,7 +345,30 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         pred_polygon = grasp_rectangle(
             pred_geometry.contacts_pixels_float, args.rectangle_thickness
         )
-        gt_candidates = annotation.get("contact_candidates_pixels") or []
+        full_polygon_area = polygon_area(pred_polygon)
+        inside_polygon_area = polygon_inside_image_area(
+            pred_polygon, width, height
+        )
+        geometric_outside_ratio = (
+            min(
+                1.0,
+                max(
+                    0.0,
+                    (full_polygon_area - inside_polygon_area) / full_polygon_area,
+                ),
+            )
+            if full_polygon_area > 1e-9
+            else 0.0
+        )
+        geometric_outside_ratios.append(geometric_outside_ratio)
+        geometric_outside_count += int(
+            geometric_outside_ratio > args.outside_threshold
+        )
+        gt_candidates = (
+            annotation.get("evaluation_contact_candidates_pixels")
+            or annotation.get("contact_candidates_pixels")
+            or []
+        )
         if not gt_candidates:
             raise ValueError(f"positive sample {sample_id} has no pixel GT contacts")
 
@@ -366,6 +422,15 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             pred_geometry.center_pixels_float[0] - gt_center[0],
             pred_geometry.center_pixels_float[1] - gt_center[1],
         )
+        endpoint_error = _swap_invariant_endpoint_error(pred_pixels, best_gt)
+        width_error = abs(
+            pred_geometry.opening_width_pixels
+            - best_gt_geometry.opening_width_pixels
+        )
+        endpoint_errors.append(endpoint_error)
+        angle_errors.append(corrected_angle)
+        center_errors.append(center_error)
+        width_errors.append(width_error)
         result.update(
             {
                 "prediction_contacts_pixels": list(pred_pixels),
@@ -375,14 +440,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "angle_error_official_buggy_degrees": official_buggy_angle,
                 "gacc_corrected": corrected,
                 "gacc_official_buggy": official_buggy,
-                "endpoint_error_pixels": _swap_invariant_endpoint_error(
-                    pred_pixels, best_gt
-                ),
+                "endpoint_error_pixels": endpoint_error,
                 "center_error_pixels": center_error,
-                "width_error_pixels": abs(
-                    pred_geometry.opening_width_pixels
-                    - best_gt_geometry.opening_width_pixels
-                ),
+                "width_error_pixels": width_error,
+                "outside_ratio_2d_geometry": geometric_outside_ratio,
             }
         )
 
@@ -449,17 +510,44 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             2 * none_precision * none_recall / max(1e-12, none_precision + none_recall)
         ),
         "collision_valid_samples": collision_valid_count,
+        "collision_evaluable_rate": collision_valid_count / max(1, positive_count),
         "collision_unknown_rate": collision_unknown_count / max(1, positive_count),
-        "collision_rate_2d": collision_count / max(1, collision_valid_count),
-        "mean_collision_ratio_2d": (
-            collision_ratio_sum / max(1, collision_valid_count)
+        "collision_rate_2d": (
+            collision_count / collision_valid_count
+            if collision_valid_count
+            else None
         ),
-        "mean_outside_ratio_2d": outside_ratio_sum / max(1, collision_valid_count),
+        "mean_collision_ratio_2d": (
+            collision_ratio_sum / collision_valid_count
+            if collision_valid_count
+            else None
+        ),
+        "mean_outside_ratio_2d": (
+            outside_ratio_sum / collision_valid_count
+            if collision_valid_count
+            else None
+        ),
         "collision_aware_gacc_valid": (
-            collision_aware_correct / max(1, collision_valid_count)
+            collision_aware_correct / collision_valid_count
+            if collision_valid_count
+            else None
         ),
         "collision_aware_gacc_strict": (
-            collision_aware_correct / max(1, positive_count)
+            collision_aware_correct / positive_count
+            if collision_valid_count and positive_count
+            else None
+        ),
+        "swap_invariant_endpoint_error_pixels": _metric_summary(endpoint_errors),
+        "swap_invariant_angle_error_degrees": _metric_summary(angle_errors),
+        "center_error_pixels": _metric_summary(center_errors),
+        "width_error_pixels": _metric_summary(width_errors),
+        "outside_ratio_2d_geometry": _metric_summary(
+            geometric_outside_ratios
+        ),
+        "outside_rate_2d_geometry": (
+            geometric_outside_count / len(geometric_outside_ratios)
+            if geometric_outside_ratios
+            else None
         ),
         "mean_latency_seconds": sum(
             float(row["latency_seconds"]) for row in results

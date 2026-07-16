@@ -190,6 +190,7 @@ class LocateAnythingRuntime:
         generation_stats = {
             "generation_seconds": round(generation_seconds, 6),
             "box_count": raw_output.count("<box>"),
+            "grasp_count": raw_output.count("<grasp>"),
         }
 
         boxes = []

@@ -50,7 +50,7 @@ class FakeGraspWorker(FakeWorker):
         assert kwargs["n_future_tokens"] == 6
         assert kwargs["image_size"] == (100, 100)
         assert kwargs["contact_coord_mass_threshold"] > 0
-        return "<ref>grasp</ref><box><100><500><900><500></box>"
+        return "<ref>grasp</ref><grasp><100><500><900><500></grasp>"
 
 
 class _RecordingLock:

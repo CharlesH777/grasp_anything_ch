@@ -47,7 +47,7 @@ app.add_middleware(
 
 
 @app.get("/healthz", response_model=HealthResponse)
-def health() -> HealthResponse:
+async def health() -> HealthResponse:
     return HealthResponse(
         status="ok" if RUNTIME.loaded else "degraded",
         model_loaded=RUNTIME.loaded,

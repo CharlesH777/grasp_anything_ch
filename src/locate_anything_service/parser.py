@@ -11,9 +11,9 @@ OBJECT_PATTERN = re.compile(
 )
 GEOMETRY_PATTERN = re.compile(r"<box>((?:<-?\d+(?:\.\d+)?>){2,4})</box>")
 NUMBER_PATTERN = re.compile(r"<(-?\d+(?:\.\d+)?)>")
-BOX_START_PATTERN = re.compile(r"<box>", re.IGNORECASE)
-BOX_END_PATTERN = re.compile(r"</box>", re.IGNORECASE)
-BOX_PAYLOAD_PATTERN = re.compile(r"<box>(.*?)</box>", re.IGNORECASE | re.DOTALL)
+GRASP_START_PATTERN = re.compile(r"<grasp>", re.IGNORECASE)
+GRASP_END_PATTERN = re.compile(r"</grasp>", re.IGNORECASE)
+GRASP_PAYLOAD_PATTERN = re.compile(r"<grasp>(.*?)</grasp>", re.IGNORECASE | re.DOTALL)
 GRASP_COORD_PATTERN = re.compile(
     r"\s*<\s*(-?\d+(?:\.\d+)?)\s*>\s*"
     r"<\s*(-?\d+(?:\.\d+)?)\s*>\s*"
@@ -98,15 +98,28 @@ def _invalid_grasp(error: str) -> ParsedGraspOutput:
 def parse_grasp_output(
     text: str, image_width: int, image_height: int
 ) -> ParsedGraspOutput:
-    payload_matches = list(BOX_PAYLOAD_PATTERN.finditer(text))
+    payload_matches = list(GRASP_PAYLOAD_PATTERN.finditer(text))
+    if re.search(r"</?box>", text, re.IGNORECASE):
+        return _invalid_grasp("legacy <box> blocks are not valid grasp output")
     if (
         len(payload_matches) != 1
-        or len(BOX_START_PATTERN.findall(text)) != 1
-        or len(BOX_END_PATTERN.findall(text)) != 1
+        or len(GRASP_START_PATTERN.findall(text)) != 1
+        or len(GRASP_END_PATTERN.findall(text)) != 1
     ):
-        return _invalid_grasp("expected exactly one complete <box> block")
+        return _invalid_grasp("expected exactly one complete <grasp> block")
 
     match = payload_matches[0]
+    outside_block = text[: match.start()] + text[match.end() :]
+    outside_block = OBJECT_PATTERN.sub("", outside_block)
+    outside_block = re.sub(
+        r"<\|(?:im_end|endoftext|eot_id)\|>|</s>",
+        "",
+        outside_block,
+        flags=re.IGNORECASE,
+    )
+    if NUMBER_PATTERN.search(outside_block):
+        return _invalid_grasp("coordinate token found outside the <grasp> block")
+
     payload = match.group(1)
     if NONE_PATTERN.fullmatch(payload):
         return ParsedGraspOutput(status="none", grasps=[])
@@ -114,7 +127,7 @@ def parse_grasp_output(
     coordinate_match = GRASP_COORD_PATTERN.fullmatch(payload)
     if coordinate_match is None:
         return _invalid_grasp(
-            "expected <box><x1><y1><x2><y2></box> or <box>none</box>"
+            "expected <grasp><x1><y1><x2><y2></grasp> or <grasp>none</grasp>"
         )
 
     values = tuple(float(value) for value in coordinate_match.groups())
