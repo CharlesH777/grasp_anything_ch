@@ -10,7 +10,7 @@
 
 上游模型、remote-code 类名和 `LOCATE_*` 环境变量保留 LocateAnything 命名。本项目的发行名、CLI、API/UI、Docker 和 systemd 服务统一使用 `grasp_anything` / `grasp-anything`。
 
-## 当前状态
+## 当前状态（这是一个未完成的项目）
 
 代码侧已经完成：
 
