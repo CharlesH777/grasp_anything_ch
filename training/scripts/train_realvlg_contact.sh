@@ -12,8 +12,12 @@ override_names=(
   MODEL_PATH EAGLE_ROOT PYTHON_BIN REALVLG_OUTPUT_DIR META_PATH
   REALVLG_META_PATH CONTACT_PHASE NPROC_PER_NODE CUDA_VISIBLE_DEVICES
   MAX_SEQ_LENGTH GRADIENT_ACCUMULATION_STEPS MAX_STEPS LEARNING_RATE
+  PER_DEVICE_TRAIN_BATCH_SIZE
+  WARMUP_RATIO WEIGHT_DECAY MAX_GRAD_NORM LR_SCHEDULER_TYPE
+  LOGGING_STEPS SAVE_STEPS SAVE_TOTAL_LIMIT SEED
   DATALOADER_NUM_WORKERS PACKING_BUFFER_SIZE
   RESUME_FROM_CHECKPOINT DRY_RUN CONTACT_MAX_CANDIDATES
+  CONTACT_PAIR_MAX_CANDIDATES
   CONTACT_PAIR_WEIGHT CONTACT_CENTER_WEIGHT CONTACT_ANGLE_WEIGHT
   CONTACT_WIDTH_WEIGHT CONTACT_GEOMETRY_START_BLOCKS
   CONTACT_GEOMETRY_RAMP_BLOCKS CONTACT_COORD_MASS_THRESHOLD
@@ -23,7 +27,10 @@ override_names=(
   CONTACT_MIN_NEGATIVE_SAMPLES GROUNDING_MIN_REPLAY_SAMPLES
   CONTACT_MIN_POSITIVE_FRACTION CONTACT_MIN_NEGATIVE_FRACTION
   GROUNDING_MIN_REPLAY_FRACTION
-  LLM_LORA_RANK ALLOW_OVERFIT_PHASE_TRANSITION
+  LLM_LORA_RANK VISION_LORA_RANK VISION_LORA_LAST_LAYERS
+  ALLOW_OVERFIT_PHASE_TRANSITION
+  ALLOW_SAME_PHASE_WEIGHT_RESTART
+  GRASP_ONLY
   CUDA_HOME TORCH_EXTENSIONS_DIR TRITON_CACHE_DIR MAX_JOBS
   PREBUILD_DEEPSPEED_FUSED_ADAM GRASP_SMOKE_SKIP_SAVE
 )
@@ -49,10 +56,26 @@ export CONTACT_PHASE="${phase}"
 nproc="${NPROC_PER_NODE:-4}"
 meta_path="${META_PATH:-${REALVLG_META_PATH:-}}"
 llm_lora_rank="${LLM_LORA_RANK:-32}"
+vision_lora_rank="${VISION_LORA_RANK:-0}"
+vision_lora_last_layers="${VISION_LORA_LAST_LAYERS:-4}"
 dataloader_num_workers="${DATALOADER_NUM_WORKERS:-4}"
+per_device_train_batch_size="${PER_DEVICE_TRAIN_BATCH_SIZE:-1}"
+grasp_only="${GRASP_ONLY:-0}"
 
 if [[ ! "${llm_lora_rank}" =~ ^[1-9][0-9]*$ ]]; then
   echo "LLM_LORA_RANK must be a positive integer." >&2
+  exit 1
+fi
+if [[ ! "${vision_lora_rank}" =~ ^[0-9]+$ ]]; then
+  echo "VISION_LORA_RANK must be a non-negative integer." >&2
+  exit 1
+fi
+if [[ ! "${vision_lora_last_layers}" =~ ^[0-9]+$ ]]; then
+  echo "VISION_LORA_LAST_LAYERS must be a non-negative integer." >&2
+  exit 1
+fi
+if (( vision_lora_rank > 0 && vision_lora_last_layers == 0 )); then
+  echo "VISION_LORA_LAST_LAYERS must be positive when vision LoRA is enabled." >&2
   exit 1
 fi
 if [[ ! "${nproc}" =~ ^[1-9][0-9]*$ ]]; then
@@ -61,6 +84,14 @@ if [[ ! "${nproc}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "${dataloader_num_workers}" =~ ^[0-9]+$ ]]; then
   echo "DATALOADER_NUM_WORKERS must be a non-negative integer." >&2
+  exit 1
+fi
+if [[ "${per_device_train_batch_size}" != "1" && "${per_device_train_batch_size}" != "2" ]]; then
+  echo "Packed contact training supports PER_DEVICE_TRAIN_BATCH_SIZE=1 or 2." >&2
+  exit 1
+fi
+if [[ "${grasp_only}" != "0" && "${grasp_only}" != "1" ]]; then
+  echo "GRASP_ONLY must be 0 or 1." >&2
   exit 1
 fi
 
@@ -74,11 +105,6 @@ if [[ -z "${meta_path}" || ! -f "${meta_path}" ]]; then
   echo "META_PATH must point to an existing Eagle dataset meta JSON." >&2
   exit 1
 fi
-if [[ ! -d "${eagle_root}/Embodied" ]]; then
-  echo "Eagle checkout not found: ${eagle_root}" >&2
-  exit 1
-fi
-
 if [[ -n "${CUDA_HOME:-}" ]]; then
   if [[ ! -x "${CUDA_HOME}/bin/nvcc" ]]; then
     echo "CUDA_HOME does not contain an executable bin/nvcc: ${CUDA_HOME}" >&2
@@ -95,50 +121,8 @@ if [[ -n "${TRITON_CACHE_DIR:-}" ]]; then
 fi
 "${python_bin}" "${project_dir}/scripts/validate_training_environment.py"
 
-contact_patch="${project_dir}/patches/locateanything-grasp-contact.patch"
-if [[ ! -f "${contact_patch}" ]]; then
-  echo "Missing contact training patch: ${contact_patch}" >&2
-  exit 1
-fi
-if git -C "${eagle_root}" apply --reverse --check "${contact_patch}" \
-    >/dev/null 2>&1; then
-  echo "Contact training patch is already applied."
-elif git -C "${eagle_root}" apply --check "${contact_patch}" \
-    >/dev/null 2>&1; then
-  echo "Applying grasp_anything contact training patch..."
-  git -C "${eagle_root}" apply "${contact_patch}"
-elif [[ -f "${eagle_root}/Embodied/eaglevl/train/grasp_contact.py" ]] \
-    && [[ -f "${eagle_root}/Embodied/eaglevl/utils/locany/grasp_adapter_utils.py" ]] \
-    && grep -q "contact_loss_enabled" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "output_loading_info=True" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "initialize_missing_task_adapters" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "enable_task_token_training" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "configure_llm_lora" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "contact_outside_threshold=model_args.contact_outside_threshold" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "assistant contact target is unsafe" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "data_fingerprint" \
-      "${eagle_root}/Embodied/eaglevl/train/locany_finetune_magi_stream.py" \
-    && grep -q "combine_base_and_pair_ce" \
-      "${eagle_root}/Embodied/eaglevl/train/grasp_contact.py" \
-    && grep -q "compute_coordinate_token_metrics" \
-      "${eagle_root}/Embodied/eaglevl/model/locany/modeling_locateanything.py" \
-    && grep -q "apply_grasp_task_output_delta" \
-      "${eagle_root}/Embodied/eaglevl/utils/locany/modeling_locateanything.py" \
-    && grep -q "contact_loss_enabled" \
-      "${eagle_root}/Embodied/eaglevl/model/locany/modeling_locateanything.py"; then
-  echo "Contact training code is already integrated; skipping Git patch check."
-else
-  echo "Unable to apply contact training patch cleanly." >&2
-  echo "Check the Eagle revision and local modifications: ${eagle_root}" >&2
-  exit 1
-fi
+bash "${project_dir}/scripts/bootstrap_eagle.sh" \
+  --eagle-root "${eagle_root}" --no-clone
 
 contact_loss=False
 active_candidates=1
@@ -162,6 +146,7 @@ case "${phase}" in
     ;;
   pair)
     contact_loss=True
+    active_candidates="${CONTACT_PAIR_MAX_CANDIDATES:-1}"
     min_contact_samples="${CONTACT_MIN_FULL_SAMPLES:-1000}"
     min_grounding_samples="${GROUNDING_MIN_REPLAY_SAMPLES:-1}"
     min_contact_fraction="${CONTACT_MIN_POSITIVE_FRACTION:-0.70}"
@@ -200,6 +185,17 @@ case "${phase}" in
     exit 1
     ;;
 esac
+if [[ ! "${active_candidates}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Active contact candidate count must be a positive integer." >&2
+  exit 1
+fi
+if [[ "${grasp_only}" == "1" && "${phase}" != "overfit" ]]; then
+  # This mode intentionally optimizes only the 2D contact task instead of
+  # retaining LocateAnything's unrelated grounding/detection behavior.
+  min_grounding_samples=0
+  min_grounding_fraction=0.0
+  echo "GRASP_ONLY=1: grounding replay is intentionally disabled."
+fi
 for requirement in \
   "CONTACT_MIN_CONTACT_SAMPLES:${min_contact_samples}" \
   "GROUNDING_MIN_REPLAY_SAMPLES:${min_grounding_samples}" \
@@ -237,6 +233,13 @@ if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
 fi
 if [[ "${ALLOW_OVERFIT_PHASE_TRANSITION:-0}" == "1" ]]; then
   phase_validation+=(--allow-overfit)
+fi
+if [[ "${ALLOW_SAME_PHASE_WEIGHT_RESTART:-0}" == "1" ]]; then
+  if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
+    echo "ALLOW_SAME_PHASE_WEIGHT_RESTART cannot be combined with RESUME_FROM_CHECKPOINT." >&2
+    exit 1
+  fi
+  phase_validation+=(--allow-same-phase-weight-restart)
 fi
 "${phase_validation[@]}"
 
@@ -299,13 +302,14 @@ command=(
   --freeze_llm True
   --freeze_mlp False
   --use_llm_lora "${llm_lora_rank}"
-  --use_backbone_lora 0
+  --use_backbone_lora "${vision_lora_rank}"
+  --backbone_lora_last_layers "${vision_lora_last_layers}"
   --unfreeze_lm_head False
   --bf16 True
   --tf32 True
   --grad_checkpoint True
   --deepspeed "${deepspeed_config}"
-  --per_device_train_batch_size 1
+  --per_device_train_batch_size "${per_device_train_batch_size}"
   --gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS:-4}"
   --max_seq_length "${MAX_SEQ_LENGTH:-2048}"
   --max_num_tokens_per_sample "${MAX_SEQ_LENGTH:-2048}"

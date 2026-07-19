@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 SCRIPT = (
     Path(__file__).resolve().parents[1]
     / "training"
@@ -18,7 +17,9 @@ validator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validator)
 
 
-def test_training_environment_accepts_local_pinned_stack() -> None:
+def test_training_environment_accepts_pinned_stack(monkeypatch) -> None:
+    monkeypatch.setattr(validator, "version", validator.EXPECTED_VERSIONS.__getitem__)
+
     validator.validate_versions()
 
 

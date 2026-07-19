@@ -196,19 +196,63 @@ def test_same_phase_resume_requires_matching_training_phase(tmp_path: Path) -> N
         )
 
 
+def test_same_phase_weight_restart_is_explicit_and_accepts_legacy_state(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_checkpoint(checkpoint, grasp=True, accepted_phase="sft")
+    contact_state_path = checkpoint / "grasp_contact_trainer_state.json"
+    contact_state = json.loads(contact_state_path.read_text(encoding="utf-8"))
+    del contact_state["training_phase"]
+    del contact_state["data_fingerprint"]
+    contact_state_path.write_text(json.dumps(contact_state), encoding="utf-8")
+    meta = tmp_path / "full_meta.json"
+    _write_meta(meta, "/tmp/contact_train_grasp_v2.jsonl")
+
+    with pytest.raises(ValueError, match="requires an accepted overfit"):
+        validator.validate_phase_transition("sft", checkpoint, meta)
+
+    validator.validate_phase_transition(
+        "sft",
+        checkpoint,
+        meta,
+        allow_same_phase_weight_restart=True,
+    )
+
+
+def test_same_phase_weight_restart_rejects_cross_phase_checkpoint(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_checkpoint(checkpoint, grasp=True, accepted_phase="pair")
+    meta = tmp_path / "full_meta.json"
+    _write_meta(meta, "/tmp/contact_train_grasp_v2.jsonl")
+
+    with pytest.raises(ValueError, match="same-phase weight restart"):
+        validator.validate_phase_transition(
+            "sft",
+            checkpoint,
+            meta,
+            allow_same_phase_weight_restart=True,
+        )
+
+
 def test_overfit_phase_does_not_require_a_grasp_checkpoint(tmp_path: Path) -> None:
     validator.validate_phase_transition(
         "overfit", tmp_path / "missing-model", tmp_path / "missing-meta"
     )
 
 
-def test_geometry_and_multigt_use_distinct_candidate_curricula() -> None:
+def test_pair_geometry_and_multigt_use_distinct_candidate_curricula() -> None:
     source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+    pair = re.search(r"\n  pair\)(.*?)\n    ;;", source, re.DOTALL)
     geometry = re.search(r"\n  geometry\)(.*?)\n    ;;", source, re.DOTALL)
     later = re.search(r"\n  negative\|multigt\)(.*?)\n    ;;", source, re.DOTALL)
 
+    assert pair is not None
     assert geometry is not None
     assert later is not None
+    assert 'active_candidates="${CONTACT_PAIR_MAX_CANDIDATES:-1}"' in pair.group(1)
     assert "active_candidates=1" in geometry.group(1)
     assert "CONTACT_MAX_CANDIDATES" not in geometry.group(1)
     assert '[[ "${phase}" == "multigt" ]]' in later.group(1)
@@ -221,3 +265,45 @@ def test_training_does_not_implicitly_resume_last_checkpoint() -> None:
     assert "training_args.resume_from_checkpoint or last_checkpoint" not in source
     assert "no explicit " in source
     assert "RESUME_FROM_CHECKPOINT was provided" in source
+
+
+def test_packed_training_limits_supported_tensor_batch_size() -> None:
+    source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'per_device_train_batch_size="${PER_DEVICE_TRAIN_BATCH_SIZE:-1}"' in source
+    assert '"${per_device_train_batch_size}" != "2"' in source
+    assert "supports PER_DEVICE_TRAIN_BATCH_SIZE=1 or 2" in source
+
+
+def test_runtime_training_controls_survive_config_sourcing() -> None:
+    source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+
+    for name in (
+        "WARMUP_RATIO",
+        "WEIGHT_DECAY",
+        "MAX_GRAD_NORM",
+        "LR_SCHEDULER_TYPE",
+        "LOGGING_STEPS",
+        "SAVE_STEPS",
+        "SAVE_TOTAL_LIMIT",
+        "SEED",
+    ):
+        assert name in source.split("declare -A environment_overrides", 1)[0]
+
+
+def test_grasp_only_mode_explicitly_disables_grounding_gate() -> None:
+    source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'grasp_only="${GRASP_ONLY:-0}"' in source
+    assert "grounding replay is intentionally disabled" in source
+    grasp_only = source.split('if [[ "${grasp_only}" == "1"', 1)[1]
+    assert "min_grounding_samples=0" in grasp_only
+    assert "min_grounding_fraction=0.0" in grasp_only
+
+
+def test_training_uses_pinned_eagle_bootstrap() -> None:
+    source = TRAIN_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'scripts/bootstrap_eagle.sh"' in source
+    assert "--no-clone" in source
+    assert "skipping Git patch check" not in source

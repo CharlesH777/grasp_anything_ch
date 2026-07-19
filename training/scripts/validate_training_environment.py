@@ -9,7 +9,6 @@ from pathlib import Path
 
 from packaging.version import Version
 
-
 EXPECTED_VERSIONS = {
     "numpy": "1.26.4",
     "peft": "0.12.0",

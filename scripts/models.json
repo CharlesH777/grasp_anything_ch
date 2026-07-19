@@ -1,8 +1,16 @@
 {
   "official": {
     "name": "LA 官方原始权重",
-    "desc": "nvidia/LocateAnything-3B 官方仓库",
+    "desc": "nvidia/LocateAnything-3B 官方仓库（无抓取能力）",
     "LOCATE_MODEL_ID": "nvidia/LocateAnything-3B",
-    "LOCATE_MODEL_REVISION": "c32291ca5e996f5a7a485845b4f57a233936bba0"
+    "LOCATE_MODEL_REVISION": "c32291ca5e996f5a7a485845b4f57a233936bba0",
+    "LOCATE_REQUIRE_GRASP_CHECKPOINT": "0"
+  },
+  "grasp-local": {
+    "name": "本地 Grasp checkpoint",
+    "desc": "放置在 models/grasp-anything-checkpoint 的完整抓取 checkpoint",
+    "LOCATE_MODEL_ID": "./models/grasp-anything-checkpoint",
+    "LOCATE_MODEL_REVISION": "",
+    "LOCATE_REQUIRE_GRASP_CHECKPOINT": "1"
   }
 }

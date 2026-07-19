@@ -66,6 +66,11 @@ class _RecordingLock:
 
 
 class _LoadedWorker:
+    def __init__(self, grasp_task_token_ids=None) -> None:
+        self.config = types.SimpleNamespace(
+            grasp_task_token_ids=grasp_task_token_ids
+        )
+
     def to(self, _device):
         return self
 
@@ -73,7 +78,9 @@ class _LoadedWorker:
         return self
 
 
-def _fake_transformers(*, fail_model: bool = False) -> types.ModuleType:
+def _fake_transformers(
+    *, fail_model: bool = False, grasp_task_token_ids=None
+) -> types.ModuleType:
     module = types.ModuleType("transformers")
 
     class AutoTokenizer:
@@ -91,7 +98,7 @@ def _fake_transformers(*, fail_model: bool = False) -> types.ModuleType:
         def from_pretrained(*_args, **_kwargs):
             if fail_model:
                 raise RuntimeError("model load failed")
-            return _LoadedWorker()
+            return _LoadedWorker(grasp_task_token_ids)
 
     module.AutoTokenizer = AutoTokenizer
     module.AutoProcessor = AutoProcessor
@@ -128,6 +135,18 @@ def test_failed_load_does_not_publish_partial_state(monkeypatch) -> None:
     assert runtime._processor is None
     assert runtime._worker is None
     assert runtime.load_error == "model load failed"
+
+
+def test_required_grasp_checkpoint_rejects_base_model(monkeypatch) -> None:
+    runtime = LocateAnythingRuntime(
+        Settings(device="cpu", require_grasp_checkpoint=True)
+    )
+    monkeypatch.setitem(sys.modules, "transformers", _fake_transformers())
+
+    with pytest.raises(RuntimeError, match="grasp_task_token_ids"):
+        runtime.load()
+
+    assert runtime.loaded is False
 
 
 def test_runtime_uses_setting_default_and_structured_stats(tmp_path: Path) -> None:

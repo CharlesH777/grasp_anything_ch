@@ -32,6 +32,7 @@ htmlcov/
 
 # ===== Environment & secrets =====
 .env
+.env.*
 .env.local
 .env.*.local
 !.env.example
@@ -42,6 +43,12 @@ training/data/*.jsonl
 training/data/*_meta.json
 training/data/*_stats.json
 training/data/splits/
+training/data/*.local*.json
+training/data/*.single*.json
+
+# ===== Machine-specific training configuration =====
+training/configs/*.local*.env
+training/configs/*.single*.env
 
 # ===== Model checkpoints & training outputs (large, generated) =====
 training/outputs/

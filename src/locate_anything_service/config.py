@@ -19,6 +19,7 @@ class Settings:
     hf_home: str | None = None
     load_model_on_startup: bool = True
     allow_cpu: bool = False
+    require_grasp_checkpoint: bool = False
     generation_mode: str = "hybrid"
     max_new_tokens: int = 2048
     temperature: float = 0.7
@@ -60,6 +61,9 @@ class Settings:
                 os.getenv("LOCATE_LOAD_MODEL_ON_STARTUP"), True
             ),
             allow_cpu=_as_bool(os.getenv("LOCATE_ALLOW_CPU"), False),
+            require_grasp_checkpoint=_as_bool(
+                os.getenv("LOCATE_REQUIRE_GRASP_CHECKPOINT"), False
+            ),
             generation_mode=os.getenv("LOCATE_GENERATION_MODE", "hybrid"),
             max_new_tokens=int(os.getenv("LOCATE_MAX_NEW_TOKENS", "2048")),
             temperature=float(os.getenv("LOCATE_TEMPERATURE", "0.7")),

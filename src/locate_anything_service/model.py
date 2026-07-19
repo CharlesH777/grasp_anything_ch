@@ -98,7 +98,21 @@ class LocateAnythingRuntime:
                     torch_dtype=model_dtype,
                     trust_remote_code=True,
                     low_cpu_mem_usage=True,
-                ).to(device).eval()
+                )
+                if self.settings.require_grasp_checkpoint:
+                    task_token_ids = getattr(
+                        worker.config, "grasp_task_token_ids", None
+                    )
+                    if (
+                        not isinstance(task_token_ids, list)
+                        or len(task_token_ids) != 2
+                        or task_token_ids[0] == task_token_ids[1]
+                    ):
+                        raise RuntimeError(
+                            "LOCATE_REQUIRE_GRASP_CHECKPOINT=1 but the model "
+                            "does not define two distinct grasp_task_token_ids"
+                        )
+                worker = worker.to(device).eval()
 
                 self._device = device
                 self._tokenizer = tokenizer

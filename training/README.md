@@ -1,4 +1,8 @@
-# LocateAnything 单卡 LoRA 训练工作区
+# LocateAnything 单卡 LoRA 历史工作区
+
+> 本文档记录旧 VOC 单卡实验，不是当前 grasp-contact 训练入口。当前环境使用
+> `bash scripts/bootstrap.sh --training`，固定 Eagle revision 和完整 contact patch；
+> 参见仓库根目录的 `DEPLOYMENT.md` 与 `GRASP_CONTACT_README.md`。
 
 此目录针对当前 RTX 3090 Ti 24GB 主机准备。脚本默认只打印命令，不会自动启动训练。
 
@@ -23,17 +27,13 @@ training/
 4. 将 `data/voc_train_meta.example.json` 复制为 `data/voc_train_meta.json`。
 5. 正式训练前停止 LocateAnything 推理服务，释放约 8GB 显存。
 
-官方代码尚未准备时：
+旧 VOC 环境尚未准备时也应使用固定 bootstrap，不要 clone 浮动的 Eagle main：
 
 ```bash
-git clone https://github.com/NVlabs/Eagle.git training/Eagle
-python3.11 -m venv training/.venv
-source training/.venv/bin/activate
-pip install --upgrade pip
-pip install -e training/Eagle/Embodied
+bash scripts/bootstrap.sh --training --venv training/.venv
 ```
 
-训练环境还需要安装与驱动兼容的 PyTorch CUDA 版本。当前推荐保持 `torch==2.8.0`、CUDA 12.8 wheel，与已验证推理环境一致。
+训练环境固定版本见 `pyproject.toml`；需要其他 CUDA wheel 时通过 `TORCH_INDEX_URL` 覆盖下载源，但不能绕过 `validate_training_environment.py` 的版本检查。
 
 ## 安全预览
 

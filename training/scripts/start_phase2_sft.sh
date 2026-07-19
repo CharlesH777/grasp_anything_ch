@@ -3,10 +3,10 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 config_file="${CONFIG_FILE:-${project_root}/training/configs/grasp_anything_realvlg_contact.remote.env}"
-checkpoint="${MODEL_PATH:-/data2/zhenghengcao/grasp_anything_2d/outputs/realvlg-contact-lora/overfit/checkpoint-300}"
-meta_path="${META_PATH:-/data2/zhenghengcao/grasp_anything_2d/prepared/full_contact_meta.json}"
+checkpoint="${MODEL_PATH:-}"
+meta_path="${META_PATH:-}"
 max_steps="${MAX_STEPS:-13000}"
-log_dir="${LOG_DIR:-/data2/zhenghengcao/grasp_anything_2d/logs}"
+log_dir="${LOG_DIR:-${project_root}/training/logs}"
 timestamp="$(date '+%Y%m%d-%H%M%S')"
 log_file="${LOG_FILE:-${log_dir}/phase2-sft-${timestamp}.log}"
 
@@ -14,12 +14,12 @@ if [[ ! -f "${config_file}" ]]; then
   echo "Missing training config: ${config_file}" >&2
   exit 1
 fi
-if [[ ! -f "${checkpoint}/config.json" ]]; then
-  echo "Missing Phase 1 checkpoint config: ${checkpoint}/config.json" >&2
+if [[ -z "${checkpoint}" || ! -f "${checkpoint}/config.json" ]]; then
+  echo "MODEL_PATH must point to an accepted Phase 1 checkpoint." >&2
   exit 1
 fi
-if [[ ! -f "${meta_path}" ]]; then
-  echo "Missing Phase 2 meta: ${meta_path}" >&2
+if [[ -z "${meta_path}" || ! -f "${meta_path}" ]]; then
+  echo "META_PATH must point to the Phase 2 full-data meta JSON." >&2
   exit 1
 fi
 if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then

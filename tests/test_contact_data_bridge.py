@@ -179,6 +179,63 @@ def test_packed_collator_preserves_contact_rows_and_label_alignment() -> None:
     assert batch["contact_task_code"].tolist() == [1]
 
 
+def test_packed_collator_combines_two_features_without_cross_sample_labels() -> None:
+    length = 12
+
+    def feature(offset: int, batch_idx: int) -> dict:
+        contact_mask = torch.zeros(length, dtype=torch.bool)
+        contact_mask[7:11] = True
+        return {
+            "input_ids": torch.arange(length) + offset,
+            "labels": torch.tensor(
+                [IGNORE_TOKEN_ID, *range(1 + offset, length + offset)],
+                dtype=torch.long,
+            ),
+            "position_ids": torch.arange(length),
+            "attention_mask": torch.ones(length, dtype=torch.bool),
+            "pixel_values": torch.zeros((4, 3, 14, 14)),
+            "image_flags": torch.tensor([1]),
+            "image_grid_hws": np.array([[2, 2]]),
+            "sub_sample_lengths": torch.tensor([length]),
+            "contact_mtp_coord_mask": contact_mask,
+            "contact_candidates": torch.tensor([[[100, 200, 300, 400]]]),
+            "contact_candidate_mask": torch.tensor([[True]]),
+            "contact_positive_mask": torch.tensor([True]),
+            "contact_image_size": torch.tensor([[640.0, 480.0]]),
+            "candidate_collision_2d": torch.tensor([[0.0]]),
+            "candidate_outside_2d": torch.tensor([[0.0]]),
+            "collision_valid": torch.tensor([True]),
+            "contact_task_code": torch.tensor([1]),
+            "_worker_key": "worker_0",
+            "_batch_idx": batch_idx,
+            "_state_snapshot": {"batch": batch_idx},
+        }
+
+    batch = packed_collate_fn_mtp([feature(0, 1), feature(20, 2)])
+
+    assert batch["input_ids"].shape == (1, 2 * length)
+    assert batch["sub_sample_lengths"][0].tolist() == [length, length]
+    assert batch["contact_mtp_coord_mask"].sum().item() == 8
+    assert batch["contact_candidates"].shape == (2, 1, 4)
+    assert batch["contact_task_code"].tolist() == [1, 1]
+    assert batch["_worker_key"] == "worker_0"
+    assert batch["_state_snapshot"] == {"batch": 2}
+
+
+def test_packed_collator_rejects_cross_worker_merge() -> None:
+    feature = {
+        "input_ids": torch.tensor([1]),
+        "_worker_key": "worker_0",
+    }
+    other = {
+        "input_ids": torch.tensor([2]),
+        "_worker_key": "worker_1",
+    }
+
+    with pytest.raises(ValueError, match="cannot combine worker streams"):
+        packed_collate_fn_mtp([feature, other])
+
+
 def test_shifted_label_count_excludes_each_packed_sample_first_label() -> None:
     labels = torch.tensor([[99, 1, 2, IGNORE_TOKEN_ID, 88, 3, 4, 5]])
     batch = {

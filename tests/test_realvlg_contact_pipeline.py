@@ -104,7 +104,10 @@ def test_shard_merger_preserves_order_and_sums_statistics(tmp_path: Path) -> Non
 
     result = merger.merge(shards, stats_shards, output, stats_output)
 
-    assert [json.loads(line)["sample_id"] for line in output.read_text().splitlines()] == [
+    output_ids = [
+        json.loads(line)["sample_id"] for line in output.read_text().splitlines()
+    ]
+    assert output_ids == [
         "a",
         "b",
     ]
@@ -542,7 +545,12 @@ def test_evaluator_prefers_complete_official_gt_candidates(tmp_path: Path) -> No
     )
     _write_jsonl(
         predictions,
-        [{"sample_id": "official", "raw_output": "<grasp><200><500><800><500></grasp>"}],
+        [
+            {
+                "sample_id": "official",
+                "raw_output": "<grasp><200><500><800><500></grasp>",
+            }
+        ],
     )
     args = argparse.Namespace(
         annotations=annotations,

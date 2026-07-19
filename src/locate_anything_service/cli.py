@@ -8,6 +8,7 @@ import uvicorn
 
 from .config import Settings
 from .model import LocateAnythingRuntime
+from .preflight import format_results, run_preflight
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -41,12 +42,36 @@ def _parser() -> argparse.ArgumentParser:
         "--generation-mode", choices=("fast", "hybrid", "slow"), default=None
     )
     predict.add_argument("--annotated-output", type=Path)
+
+    doctor = subparsers.add_parser("doctor", help="validate a deployment")
+    doctor.add_argument(
+        "--require-grasp",
+        action="store_true",
+        help="require a local checkpoint with grasp task token IDs",
+    )
+    doctor.add_argument(
+        "--skip-cuda",
+        action="store_true",
+        help="check files and dependencies without probing CUDA",
+    )
+    doctor.add_argument("--json", action="store_true", dest="json_output")
     return parser
 
 
 def main() -> None:
     args = _parser().parse_args()
     settings = Settings.from_env()
+
+    if args.command == "doctor":
+        results = run_preflight(
+            settings,
+            require_grasp=(args.require_grasp or settings.require_grasp_checkpoint),
+            check_cuda=not args.skip_cuda,
+        )
+        print(format_results(results, json_output=args.json_output))
+        if not all(item.ok for item in results):
+            raise SystemExit(1)
+        return
 
     if args.command == "serve":
         uvicorn.run(

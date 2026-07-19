@@ -1,5 +1,7 @@
 # Grasp Anything 远端运行手册
 
+> 历史机器记录，仅用于追溯 2026-07-16 的实验环境。新机器部署不要复制本文固定路径；使用根目录 `DEPLOYMENT.md` 和 `.env.example`。
+
 ## 登录与 Codex
 
 使用 `/home/charles/login_zhenghengcao.sh` 登录，工程目录为 `/home/zhenghengcao/grasp_anything`。Codex 配置、API key 和规则已同步到 `~/.codex/`，CLI 为 `~/.local/bin/codex`，版本 `0.144.4`。登录后运行 `codex login status` 检查状态。不要提交 `~/.codex/auth.json`。

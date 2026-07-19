@@ -3,17 +3,18 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 config_file="${CONFIG_FILE:-${project_root}/training/configs/grasp_anything_realvlg_contact.remote.env}"
-log_dir="${LOG_DIR:-/data2/zhenghengcao/grasp_anything_2d/logs}"
+log_dir="${LOG_DIR:-${project_root}/training/logs}"
 timestamp="$(date '+%Y%m%d-%H%M%S')"
 log_file="${LOG_FILE:-${log_dir}/phase1-overfit64-${timestamp}.log}"
-meta_path="/data2/zhenghengcao/grasp_anything_2d/prepared/overfit64_grasp_v2_meta.json"
+meta_path="${META_PATH:-}"
+max_steps="${MAX_STEPS:-300}"
 
 if [[ ! -f "${config_file}" ]]; then
   echo "Missing training config: ${config_file}" >&2
   exit 1
 fi
-if [[ ! -f "${meta_path}" ]]; then
-  echo "Missing Phase 1 meta: ${meta_path}" >&2
+if [[ -z "${meta_path}" || ! -f "${meta_path}" ]]; then
+  echo "META_PATH must point to the Phase 1 overfit meta JSON." >&2
   exit 1
 fi
 if pgrep -f 'locany_finetune_magi_stream.py' >/dev/null 2>&1; then
@@ -28,9 +29,9 @@ echo "============================================================"
 echo "Grasp Anything Phase 1: overfit64"
 echo "Config:     ${config_file}"
 echo "Meta:       ${meta_path}"
-echo "Steps:      300"
-echo "Warmup:     0.03 (9 steps)"
-echo "GPUs:       0,1,2,3"
+echo "Steps:      ${max_steps}"
+echo "Warmup:     ${WARMUP_RATIO:-0.03}"
+echo "GPUs:       ${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 echo "Log:        ${log_file}"
 echo "Started:    $(date --iso-8601=seconds)"
 echo "============================================================"
@@ -44,10 +45,10 @@ env \
   CONFIG_FILE="${config_file}" \
   CONTACT_PHASE=overfit \
   META_PATH="${meta_path}" \
-  MAX_STEPS=300 \
-  WARMUP_RATIO=0.03 \
-  CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  NPROC_PER_NODE=4 \
+  MAX_STEPS="${max_steps}" \
+  WARMUP_RATIO="${WARMUP_RATIO:-0.03}" \
+  CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}" \
+  NPROC_PER_NODE="${NPROC_PER_NODE:-4}" \
   PYTHONUNBUFFERED=1 \
   bash "${project_root}/training/scripts/train_realvlg_contact.sh" \
   2>&1 | tee "${log_file}"

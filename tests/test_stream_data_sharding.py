@@ -22,6 +22,8 @@ from eaglevl.train.locany_finetune_magi_stream import (  # noqa: E402
     StreamPackedDatasetMTP,
 )
 
+TRAIN_SOURCE = EAGLE_ROOT / "eaglevl" / "train" / "locany_finetune_magi_stream.py"
+
 
 class _IndexDataset:
     ds_name = "indices"
@@ -41,6 +43,14 @@ class _FailingIndexDataset(_IndexDataset):
         if index == 0:
             raise OSError("broken sample")
         return index
+
+
+def test_data_fingerprint_does_not_depend_on_checkpoint_path() -> None:
+    source = TRAIN_SOURCE.read_text(encoding="utf-8")
+
+    assert "'tokenizer_path':" not in source
+    assert "'tokenizer_vocab_size':" in source
+    assert "'tokenizer_added_vocab':" in source
 
 
 def _shard_pass(

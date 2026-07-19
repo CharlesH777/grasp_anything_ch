@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=@PROJECT_DIR@
 EnvironmentFile=@PROJECT_DIR@/.env
+ExecStartPre=@PROJECT_DIR@/.venv/bin/grasp-anything doctor
 ExecStart=@PROJECT_DIR@/.venv/bin/grasp-anything serve
 Restart=on-failure
 RestartSec=5

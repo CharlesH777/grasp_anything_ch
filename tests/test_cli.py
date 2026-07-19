@@ -25,3 +25,16 @@ def test_predict_generation_mode_defaults_to_none() -> None:
     args = cli._parser().parse_args(["predict", "image.png", "object"])
 
     assert args.generation_mode is None
+
+
+def test_doctor_can_skip_cuda(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "run_preflight",
+        lambda settings, **kwargs: [],
+    )
+    monkeypatch.setattr(sys, "argv", ["grasp-anything", "doctor", "--skip-cuda"])
+
+    cli.main()
+
+    assert capsys.readouterr().out == "\n"

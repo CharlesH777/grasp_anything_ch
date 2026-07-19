@@ -119,6 +119,7 @@ def _validate_grasp_checkpoint(
     target_phase: str,
     *,
     same_phase_resume: bool,
+    same_phase_weight_restart: bool = False,
 ) -> None:
     if not path.is_dir():
         raise ValueError(
@@ -182,7 +183,9 @@ def _validate_grasp_checkpoint(
         raise ValueError(f"invalid contact trainer state: {contact_state_path}")
     training_phase = contact_state.get("training_phase")
     expected_training_phase = (
-        target_phase if same_phase_resume else PREVIOUS_PHASE[target_phase]
+        target_phase
+        if same_phase_resume or same_phase_weight_restart
+        else PREVIOUS_PHASE[target_phase]
     )
     if same_phase_resume and training_phase != expected_training_phase:
         raise ValueError(
@@ -191,6 +194,7 @@ def _validate_grasp_checkpoint(
         )
     if (
         not same_phase_resume
+        and not same_phase_weight_restart
         and training_phase is not None
         and training_phase != expected_training_phase
     ):
@@ -204,6 +208,12 @@ def _validate_grasp_checkpoint(
                 "same-phase resume checkpoint has no dataset fingerprint; "
                 "load it through MODEL_PATH with a fresh data stream"
             )
+    elif same_phase_weight_restart:
+        if training_phase is not None and training_phase != target_phase:
+            raise ValueError(
+                f"checkpoint training_phase={training_phase!r}, expected "
+                f"{target_phase!r} for a same-phase weight restart"
+            )
     else:
         _validate_acceptance(path, target_phase, global_step)
 
@@ -214,14 +224,20 @@ def validate_phase_transition(
     meta_path: Path,
     resume_from_checkpoint: Path | None = None,
     allow_overfit: bool = False,
+    allow_same_phase_weight_restart: bool = False,
 ) -> None:
     if phase not in LATER_PHASES:
         return
+    if allow_same_phase_weight_restart and resume_from_checkpoint is not None:
+        raise ValueError(
+            "same-phase weight restart cannot be combined with exact resume"
+        )
     checkpoint_path = resume_from_checkpoint or model_path
     _validate_grasp_checkpoint(
         checkpoint_path.expanduser().resolve(),
         phase,
         same_phase_resume=resume_from_checkpoint is not None,
+        same_phase_weight_restart=allow_same_phase_weight_restart,
     )
     if not allow_overfit and _meta_uses_overfit_data(meta_path.expanduser().resolve()):
         raise ValueError(
@@ -239,6 +255,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--meta-path", type=Path, required=True)
     parser.add_argument("--resume-from-checkpoint", type=Path)
     parser.add_argument("--allow-overfit", action="store_true")
+    parser.add_argument(
+        "--allow-same-phase-weight-restart",
+        action="store_true",
+        help=(
+            "Explicitly load a checkpoint from the target phase as MODEL_PATH "
+            "with fresh optimizer and dataloader state."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -251,6 +275,7 @@ def main() -> int:
             args.meta_path,
             args.resume_from_checkpoint,
             args.allow_overfit,
+            args.allow_same_phase_weight_restart,
         )
     except ValueError as error:
         print(f"Phase transition validation failed: {error}", file=sys.stderr)

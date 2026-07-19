@@ -6,14 +6,20 @@ services:
       context: .
     image: grasp-anything:0.1.0
     restart: unless-stopped
+    init: true
     env_file:
       - .env
     environment:
       HF_HOME: /models/huggingface
+      LOCATE_MODEL_ID: ${DOCKER_MODEL_ID:-nvidia/LocateAnything-3B}
     ports:
       - "${LOCATE_PORT:-8000}:8000"
     volumes:
       - huggingface-cache:/models/huggingface
+      - ${GRASP_CHECKPOINT_DIR:-./models/grasp-anything-checkpoint}:/models/grasp-checkpoint:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g
     shm_size: "8gb"
     deploy:
       resources:

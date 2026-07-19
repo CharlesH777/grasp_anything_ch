@@ -55,6 +55,14 @@ def parse_args() -> argparse.Namespace:
             "scene_xxxx/0000.json."
         ),
     )
+    parser.add_argument(
+        "--official-graspnet-all-frames",
+        action="store_true",
+        help=(
+            "Keep the official GraspNet evaluation semantics but include every "
+            "kinect frame instead of only scene_xxxx/0000.json."
+        ),
+    )
     parser.add_argument("--max-candidates", type=int, default=8)
     parser.add_argument("--rectangle-thickness", type=float, default=80.0)
     parser.add_argument("--min-width-diagonal", type=float, default=1e-4)
@@ -274,6 +282,7 @@ def _load_records(
     split: str,
     camera: str | None,
     official_graspnet_eval: bool = False,
+    official_graspnet_all_frames: bool = False,
     scene_start: int | None = None,
     scene_end_exclusive: int | None = None,
 ) -> list[dict[str, Any]]:
@@ -293,7 +302,11 @@ def _load_records(
             continue
         if camera and camera not in metadata_path.parts:
             continue
-        if official_graspnet_eval and metadata_path.name != "0000.json":
+        if (
+            official_graspnet_eval
+            and not official_graspnet_all_frames
+            and metadata_path.name != "0000.json"
+        ):
             continue
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
         if not isinstance(payload, list):
@@ -358,6 +371,13 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
     official_graspnet_eval = bool(
         getattr(args, "official_graspnet_eval", False)
     )
+    official_graspnet_all_frames = bool(
+        getattr(args, "official_graspnet_all_frames", False)
+    )
+    if official_graspnet_all_frames and not official_graspnet_eval:
+        raise ValueError(
+            "--official-graspnet-all-frames requires --official-graspnet-eval"
+        )
     scene_start = getattr(args, "scene_start", None)
     scene_end_exclusive = getattr(args, "scene_end_exclusive", None)
     if (scene_start is None) != (scene_end_exclusive is None):
@@ -384,6 +404,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
         args.split,
         camera,
         official_graspnet_eval=official_graspnet_eval,
+        official_graspnet_all_frames=official_graspnet_all_frames,
         scene_start=scene_start,
         scene_end_exclusive=scene_end_exclusive,
     )
@@ -413,7 +434,10 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             if (
                 isinstance(raw_size, list | tuple)
                 and len(raw_size) == 2
-                and all(isinstance(value, int | float) and value > 0 for value in raw_size)
+                and all(
+                    isinstance(value, int | float) and value > 0
+                    for value in raw_size
+                )
             ):
                 height, width = (int(raw_size[0]), int(raw_size[1]))
                 stats["images_sized_from_metadata"] += 1
@@ -671,6 +695,7 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
             "split": args.split,
             "camera": camera,
             "official_graspnet_eval": official_graspnet_eval,
+            "official_graspnet_all_frames": official_graspnet_all_frames,
             "max_candidates": args.max_candidates,
             "rectangle_thickness": args.rectangle_thickness,
             "outside_threshold": outside_threshold,
