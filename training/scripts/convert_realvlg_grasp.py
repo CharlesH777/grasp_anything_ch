@@ -106,6 +106,21 @@ def _resolve_data_path(data_root: Path, value: str | None) -> Path | None:
     return path.resolve() if path.is_absolute() else (data_root / path).resolve()
 
 
+def _infer_image_path(
+    data_root: Path, metadata_path: Path, camera: str
+) -> Path | None:
+    scene = next(
+        (part for part in metadata_path.parts if part.startswith("scene_")),
+        None,
+    )
+    if scene is None:
+        return None
+    frame_name = metadata_path.name.removesuffix(".json")
+    if not Path(frame_name).suffix:
+        frame_name += ".png"
+    return (data_root / "scenes" / scene / camera / "rgb" / frame_name).resolve()
+
+
 def _relative_or_absolute(path: Path, data_root: Path) -> str:
     try:
         return path.relative_to(data_root).as_posix()
@@ -388,6 +403,12 @@ def convert(args: argparse.Namespace) -> dict[str, Any]:
                     stats["missing_description"] += 1
                     continue
                 image_path = _resolve_data_path(data_root, obj.get("image_path"))
+                if image_path is None:
+                    image_path = _infer_image_path(
+                        data_root, metadata_path, args.camera
+                    )
+                    if image_path is not None and image_path.is_file():
+                        stats["inferred_image_paths"] += 1
                 if image_path is None or not image_path.is_file():
                     stats["missing_images"] += 1
                     continue

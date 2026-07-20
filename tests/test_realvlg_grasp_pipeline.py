@@ -124,6 +124,25 @@ def test_converter_rejects_unrepresentable_width_without_clipping(
     assert stats["filter_reasons"]["unrepresentable_width"] == 1
 
 
+def test_converter_infers_image_path_from_official_metadata_name(
+    tmp_path: Path,
+) -> None:
+    root, _ = _dataset(tmp_path)
+    metadata = root / "metadata" / "kinect" / "scene_0100" / "0000.json"
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    payload[0].pop("image_path")
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+    output = tmp_path / "inferred.jsonl"
+
+    stats = converter.convert(_convert_args(root, output))
+
+    assert stats["statistics"]["inferred_image_paths"] == 1
+    assert stats["statistics"].get("missing_images", 0) == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["image"].endswith(
+        "scenes/scene_0100/kinect/rgb/0000.png"
+    )
+
+
 def test_official_converter_keeps_object_with_only_unrepresentable_grasps(
     tmp_path: Path,
 ) -> None:
