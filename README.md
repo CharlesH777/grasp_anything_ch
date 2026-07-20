@@ -24,6 +24,9 @@ set -a; source .env; set +a
 代码侧已经完成：
 
 - `grasp_contact` 服务模式，一次输出一个四坐标接触点块或 `none`。
+- 独立 `grasp_rect` 服务与训练链，输出 `(cx,cy,theta,width)` 并按 RealVLG
+  固定 40 px depth 确定性展开矩形；完整协议和阶段状态见
+  [`GRASP_RECT_README.md`](GRASP_RECT_README.md)。
 - contact-aware Fast/Hybrid PBD 联合解码，不再调用两次 `point`。
 - 端点交换不变 pair CE、多 GT hard-min、中心/角度/宽度辅助损失。
 - 带 90 度确定性非零次梯度的 `1-|cos|` 模 `pi` 角度损失和几何置信度门控。
@@ -36,6 +39,8 @@ set -a; source .env; set +a
 - 四卡 BF16 + SDPA + ZeRO-2 分阶段训练，LLM 使用 LoRA。
 - MoonViT 最后若干 attention 层可选 rank-N Vision LoRA。
 - 全新 Eagle checkout 启动训练时自动校验并应用 contact patch。
+- Grasp Rect 使用独立 Eagle patch、token adapter、checkpoint、严格 evaluator
+  和 phase gate，不覆盖 Contact 单任务权重。
 - Phase 2 起强制检查 grounding replay，negative/multigt 阶段额外检查可信负样本。
 
 代码仓库不包含数据集、checkpoint、optimizer state 或生成结果；部署抓取服务时必须单独提供通过 `grasp-anything doctor` 校验的完整 checkpoint。

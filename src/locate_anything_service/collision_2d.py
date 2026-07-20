@@ -12,6 +12,7 @@ from .grasp_geometry import (
     polygon_area,
     polygon_inside_image_area,
 )
+from .grasp_rect_geometry import GraspRectangleGeometry
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,13 +73,13 @@ def _clearance_pixels(
     return float(distances[polygon].min())
 
 
-def evaluate_collision_2d(
-    geometry: GraspGeometry,
+def _evaluate_polygon_collision_2d(
+    polygon,
     obstacle_mask: Image.Image | None,
     image_width: int,
     image_height: int,
     *,
-    thickness_pixels: float = 80.0,
+    thickness_pixels: float | None,
     collision_threshold: float = 0.0,
     outside_threshold: float = 0.0,
     valid: bool = True,
@@ -91,9 +92,6 @@ def evaluate_collision_2d(
     if not 0.0 <= outside_threshold <= 1.0:
         raise ValueError("outside_threshold must be in [0, 1]")
 
-    polygon = grasp_rectangle(
-        geometry.contacts_pixels_float, thickness_pixels=thickness_pixels
-    )
     full_area = polygon_area(polygon)
     if full_area <= 1e-9 or not math.isfinite(full_area):
         raise ValueError("invalid collision polygon")
@@ -124,5 +122,57 @@ def evaluate_collision_2d(
         collision_ratio=collision_ratio,
         outside_ratio=outside_ratio,
         clearance_pixels=clearance,
+        detail=detail,
+    )
+
+
+def evaluate_collision_2d(
+    geometry: GraspGeometry,
+    obstacle_mask: Image.Image | None,
+    image_width: int,
+    image_height: int,
+    *,
+    thickness_pixels: float = 80.0,
+    collision_threshold: float = 0.0,
+    outside_threshold: float = 0.0,
+    valid: bool = True,
+    detail: str | None = None,
+) -> Collision2DResult:
+    polygon = grasp_rectangle(
+        geometry.contacts_pixels_float, thickness_pixels=thickness_pixels
+    )
+    return _evaluate_polygon_collision_2d(
+        polygon,
+        obstacle_mask,
+        image_width,
+        image_height,
+        thickness_pixels=thickness_pixels,
+        collision_threshold=collision_threshold,
+        outside_threshold=outside_threshold,
+        valid=valid,
+        detail=detail,
+    )
+
+
+def evaluate_grasp_rectangle_collision_2d(
+    geometry: GraspRectangleGeometry,
+    obstacle_mask: Image.Image | None,
+    image_width: int,
+    image_height: int,
+    *,
+    collision_threshold: float = 0.0,
+    outside_threshold: float = 0.0,
+    valid: bool = True,
+    detail: str | None = None,
+) -> Collision2DResult:
+    return _evaluate_polygon_collision_2d(
+        geometry.polygon_pixels_float,
+        obstacle_mask,
+        image_width,
+        image_height,
+        thickness_pixels=geometry.gripper_depth_pixels,
+        collision_threshold=collision_threshold,
+        outside_threshold=outside_threshold,
+        valid=valid,
         detail=detail,
     )

@@ -6,7 +6,7 @@ import io
 from PIL import Image, ImageDraw, ImageFont
 
 from .grasp_geometry import grasp_rectangle
-from .schemas import Box, GraspContact, Point
+from .schemas import Box, GraspContact, GraspRectangle, Point
 
 
 def annotate_image(
@@ -14,6 +14,7 @@ def annotate_image(
     boxes: list[Box],
     points: list[Point],
     grasps: list[GraspContact] | None = None,
+    grasp_rectangles: list[GraspRectangle] | None = None,
 ) -> str:
     canvas = image.convert("RGB").copy()
     draw = ImageDraw.Draw(canvas)
@@ -72,6 +73,38 @@ def annotate_image(
         draw.text(
             (center_x + 6, center_y + 6),
             f"{label}: {grasp.collision_2d_status}",
+            fill=color,
+            font=font,
+        )
+
+    for rectangle in grasp_rectangles or []:
+        status_colors = {
+            "free": "#00a878",
+            "collision": "#d64045",
+            "unknown": "#3478c8",
+        }
+        color = status_colors[rectangle.collision_2d_status]
+        values = rectangle.rectangle_points_pixels_float
+        polygon = tuple(
+            (values[index], values[index + 1])
+            for index in range(0, len(values), 2)
+        )
+        draw.polygon(polygon, outline=color, width=3)
+        center_x, center_y = rectangle.center_pixels
+        radius = 4
+        draw.line(
+            (center_x - radius, center_y, center_x + radius, center_y),
+            fill=color,
+            width=2,
+        )
+        draw.line(
+            (center_x, center_y - radius, center_x, center_y + radius),
+            fill=color,
+            width=2,
+        )
+        draw.text(
+            (center_x + 6, center_y + 6),
+            f"{rectangle.label or 'grasp rect'}: {rectangle.collision_2d_status}",
             fill=color,
             font=font,
         )

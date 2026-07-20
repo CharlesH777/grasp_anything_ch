@@ -66,6 +66,50 @@ def test_phase_acceptance_uses_positive_weighted_metrics(tmp_path: Path) -> None
     )
 
 
+def test_rect_overfit_acceptance_records_hard_phase_gates(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "trainer_state.json").write_text(
+        json.dumps({"global_step": 300}), encoding="utf-8"
+    )
+    (checkpoint / "grasp_rect_trainer_state.json").write_text(
+        json.dumps({"training_phase": "overfit"}), encoding="utf-8"
+    )
+    metrics_path = tmp_path / "overfit.json"
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "positive_samples": 64,
+                "format_valid_rate": 1.0,
+                "positive_grasp_output_rate": 1.0,
+                "coordinate_top1_accuracy": 0.99,
+                "width_valid_rate": 1.0,
+                "complete_six_slot_rate": 1.0,
+                "gAcc_corrected_strict": 0.99,
+                "mIoU_strict": 0.72,
+                "representation_oracle_mIoU_strict": 0.73,
+                "miou_oracle_ratio": 0.986,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = acceptance.build_acceptance(
+        checkpoint,
+        "overfit",
+        {"overfit64": metrics_path},
+        min_format_valid_rate=0.99,
+        min_positive_output_rate=0.99,
+        min_gacc_strict=0.0,
+        task="grasp_rect",
+    )
+
+    assert report["accepted"] is True
+    assert report["metrics"]["coordinate_top1_accuracy"] == pytest.approx(0.99)
+    assert report["metrics"]["complete_six_slot_rate"] == pytest.approx(1.0)
+    assert report["metrics"]["miou_oracle_ratio"] == pytest.approx(0.986)
+
+
 def test_scene_sampler_round_robins_images() -> None:
     rows = [
         {"sample_id": f"sample-{index}", "image": f"image-{index // 2}.png"}

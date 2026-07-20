@@ -35,6 +35,7 @@ def _parser() -> argparse.ArgumentParser:
             "gui_point",
             "point",
             "grasp_contact",
+            "grasp_rect",
         ),
         default="ground_single",
     )
@@ -48,6 +49,11 @@ def _parser() -> argparse.ArgumentParser:
         "--require-grasp",
         action="store_true",
         help="require a local checkpoint with grasp task token IDs",
+    )
+    doctor.add_argument(
+        "--require-grasp-rect",
+        action="store_true",
+        help="require a local checkpoint with grasp rect task token IDs",
     )
     doctor.add_argument(
         "--skip-cuda",
@@ -66,6 +72,10 @@ def main() -> None:
         results = run_preflight(
             settings,
             require_grasp=(args.require_grasp or settings.require_grasp_checkpoint),
+            require_grasp_rect=(
+                args.require_grasp_rect
+                or settings.require_grasp_rect_checkpoint
+            ),
             check_cuda=not args.skip_cuda,
         )
         print(format_results(results, json_output=args.json_output))

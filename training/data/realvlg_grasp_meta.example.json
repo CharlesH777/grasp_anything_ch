@@ -1,0 +1,19 @@
+{
+  "realvlg_grasp_rect_positive": {
+    "root": "/path/to/GraspNet_VLG",
+    "annotation": "/path/to/grasp_rect_train.jsonl",
+    "task_type": "grasp_rect",
+    "sampling_weight": 0.8,
+    "max_grasp_rect_candidates": 1,
+    "data_augment": false,
+    "visual_prompt": false
+  },
+  "grounding_replay": {
+    "root": "/path/to/locateanything-data",
+    "annotation": "/path/to/grounding_replay.jsonl",
+    "task_type": "grounding",
+    "sampling_weight": 0.2,
+    "data_augment": false,
+    "visual_prompt": false
+  }
+}

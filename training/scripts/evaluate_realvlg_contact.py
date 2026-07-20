@@ -5,10 +5,11 @@ import argparse
 import json
 import math
 import random
+import re
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from PIL import Image
 
@@ -17,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from locate_anything_service.collision_2d import evaluate_collision_2d  # noqa: E402
 from locate_anything_service.grasp_geometry import (  # noqa: E402
+    GraspGeometry,
     angular_error_degrees,
     derive_grasp_geometry,
     grasp_rectangle,
@@ -31,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate LocateAnything contact-point predictions."
     )
-    parser.add_argument("--annotations", type=Path, required=True)
+    parser.add_argument("--annotations", type=Path, nargs="+", required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--predictions", type=Path)
@@ -40,6 +42,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metrics", type=Path, required=True)
     parser.add_argument(
         "--generation-mode", choices=("fast", "slow", "hybrid"), default="fast"
+    )
+    parser.add_argument(
+        "--model-family",
+        choices=("locateanything", "realvlg"),
+        default="locateanything",
+    )
+    parser.add_argument(
+        "--prediction-format",
+        choices=("locateanything", "realvlg"),
+        help="Format of --predictions; defaults to --model-family.",
+    )
+    parser.add_argument(
+        "--realvlg-max-gpu-memory",
+        help="Optional Accelerate GPU memory limit, for example 20GiB.",
+    )
+    parser.add_argument(
+        "--realvlg-max-cpu-memory",
+        help="Optional Accelerate CPU memory limit, for example 16GiB.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--coord-mass-threshold", type=float, default=1e-4)
@@ -99,12 +119,10 @@ def _swap_invariant_endpoint_error(
     px1, py1, px2, py2 = prediction
     tx1, ty1, tx2, ty2 = target
     identity = (
-        math.hypot(px1 - tx1, py1 - ty1)
-        + math.hypot(px2 - tx2, py2 - ty2)
+        math.hypot(px1 - tx1, py1 - ty1) + math.hypot(px2 - tx2, py2 - ty2)
     ) * 0.5
     swapped = (
-        math.hypot(px1 - tx2, py1 - ty2)
-        + math.hypot(px2 - tx1, py2 - ty1)
+        math.hypot(px1 - tx2, py1 - ty2) + math.hypot(px2 - tx1, py2 - ty1)
     ) * 0.5
     return min(identity, swapped)
 
@@ -122,9 +140,7 @@ def _metric_summary(values: list[float]) -> dict[str, float | int | None]:
     position = 0.95 * (len(ordered) - 1)
     lower = math.floor(position)
     upper = math.ceil(position)
-    p95 = ordered[lower] + (ordered[upper] - ordered[lower]) * (
-        position - lower
-    )
+    p95 = ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
     return {
         "count": len(ordered),
         "mean": sum(ordered) / len(ordered),
@@ -171,12 +187,16 @@ class ModelPredictor:
         self.generation_mode = generation_mode
         self.max_new_tokens = max_new_tokens
         self.coord_mass_threshold = coord_mass_threshold
-        self.model = AutoModel.from_pretrained(
-            str(model_path),
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
-            low_cpu_mem_usage=True,
-        ).to("cuda").eval()
+        self.model = (
+            AutoModel.from_pretrained(
+                str(model_path),
+                trust_remote_code=True,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+            )
+            .to("cuda")
+            .eval()
+        )
         self.processor = AutoProcessor.from_pretrained(
             str(model_path), trust_remote_code=True, use_fast=True
         )
@@ -231,6 +251,189 @@ class ModelPredictor:
         )
 
 
+class RealVLGModelPredictor:
+    def __init__(
+        self,
+        model_path: Path,
+        max_new_tokens: int,
+        max_gpu_memory: str | None,
+        max_cpu_memory: str | None,
+    ):
+        import torch
+        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+
+        self.torch = torch
+        self.max_new_tokens = max_new_tokens
+        max_memory = None
+        if max_gpu_memory or max_cpu_memory:
+            max_memory = {}
+            if max_gpu_memory:
+                max_memory[0] = max_gpu_memory
+            if max_cpu_memory:
+                max_memory["cpu"] = max_cpu_memory
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            str(model_path),
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",
+            device_map="auto",
+            max_memory=max_memory,
+            low_cpu_mem_usage=True,
+        ).eval()
+        self.processor = AutoProcessor.from_pretrained(
+            str(model_path), padding_side="left"
+        )
+
+    def __call__(self, image_path: Path, description: str) -> tuple[str, float]:
+        from qwen_vl_utils import process_vision_info
+
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
+        prompt = (
+            "Predict one stable two-finger grasp contact pair (two 2D coordinates) "
+            "for the target object described in the instruction: "
+            f'"{description.strip()}". '
+            "First output your reasoning in <think></think> tags, then provide the "
+            "final grasp in <answer></answer> tags. Follow the format: "
+            "<think> thinking process </think> "
+            "<answer>(x1,y1),(x2,y2)</answer>"
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        ).to("cuda")
+        started = time.perf_counter()
+        with self.torch.inference_mode():
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                use_cache=True,
+                pad_token_id=self.processor.tokenizer.eos_token_id,
+            )
+        trimmed = [
+            output_ids[len(input_ids) :]
+            for input_ids, output_ids in zip(
+                inputs.input_ids, generated_ids, strict=False
+            )
+        ]
+        decoded = self.processor.tokenizer.batch_decode(
+            trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+        return (
+            decoded[0] if decoded else "",
+            time.perf_counter() - started,
+        )
+
+
+class DecodedPrediction(NamedTuple):
+    status: str
+    error: str | None
+    contacts_1000: tuple[float, float, float, float] | None
+
+
+_REALVLG_CONTACT_PATTERN = re.compile(
+    r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)\s*,\s*"
+    r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)"
+)
+
+
+def decode_prediction(
+    raw_output: str,
+    width: int,
+    height: int,
+    prediction_format: str,
+) -> DecodedPrediction:
+    if prediction_format == "locateanything":
+        parsed = parse_grasp_output(raw_output, width, height)
+        contacts = (
+            tuple(float(value) for value in parsed.grasps[0].contacts_1000)
+            if parsed.status == "ok"
+            else None
+        )
+        return DecodedPrediction(parsed.status, parsed.error, contacts)
+
+    answer_match = re.search(
+        r"<answer>(.*?)</answer>", raw_output, flags=re.DOTALL | re.IGNORECASE
+    )
+    content = answer_match.group(1).strip() if answer_match else raw_output.strip()
+    match = _REALVLG_CONTACT_PATTERN.search(re.sub(r"\s+", " ", content))
+    if not match:
+        return DecodedPrediction(
+            "invalid", "expected two RealVLG pixel-space contact points", None
+        )
+    pixels = tuple(float(value) for value in match.groups())
+    if not all(math.isfinite(value) for value in pixels):
+        return DecodedPrediction("invalid", "contact coordinates are not finite", None)
+    contacts_1000 = (
+        pixels[0] * 1000.0 / width,
+        pixels[1] * 1000.0 / height,
+        pixels[2] * 1000.0 / width,
+        pixels[3] * 1000.0 / height,
+    )
+    return DecodedPrediction("ok", None, contacts_1000)
+
+
+def derive_evaluation_geometry(
+    contacts_1000: tuple[float, float, float, float],
+    image_width: int,
+    image_height: int,
+    allow_out_of_bounds: bool,
+) -> GraspGeometry:
+    if not allow_out_of_bounds:
+        return derive_grasp_geometry(contacts_1000, image_width, image_height)
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError(f"invalid image size: {image_width}x{image_height}")
+    if not all(math.isfinite(value) for value in contacts_1000):
+        raise ValueError("contact coordinates must be finite")
+
+    x1, y1, x2, y2 = contacts_1000
+    normalized = (x1 / 1000.0, y1 / 1000.0, x2 / 1000.0, y2 / 1000.0)
+    pixels = (
+        normalized[0] * image_width,
+        normalized[1] * image_height,
+        normalized[2] * image_width,
+        normalized[3] * image_height,
+    )
+    dx = pixels[2] - pixels[0]
+    dy = pixels[3] - pixels[1]
+    width_pixels = math.hypot(dx, dy)
+    if width_pixels <= 1e-9:
+        raise ValueError("contact points must not coincide")
+    return GraspGeometry(
+        contacts_1000=contacts_1000,
+        contacts_normalized=normalized,
+        contacts_pixels_float=pixels,
+        center_1000=((x1 + x2) * 0.5, (y1 + y2) * 0.5),
+        center_pixels_float=(
+            (pixels[0] + pixels[2]) * 0.5,
+            (pixels[1] + pixels[3]) * 0.5,
+        ),
+        angle_radians_image=math.atan2(dy, dx) % math.pi,
+        opening_width_pixels=width_pixels,
+        opening_width_diagonal_normalized=(
+            width_pixels / math.hypot(image_width, image_height)
+        ),
+    )
+
+
 def _prediction_map(path: Path | None) -> dict[str, dict[str, Any]]:
     if path is None:
         return {}
@@ -239,6 +442,8 @@ def _prediction_map(path: Path | None) -> dict[str, dict[str, Any]]:
 
 def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     coord_mass_threshold = float(getattr(args, "coord_mass_threshold", 1e-4))
+    model_family = str(getattr(args, "model_family", "locateanything"))
+    prediction_format = str(getattr(args, "prediction_format", None) or model_family)
     for name, value in (
         ("coord_mass_threshold", coord_mass_threshold),
         ("collision_threshold", args.collision_threshold),
@@ -246,21 +451,37 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     ):
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"{name} must be in [0, 1]")
-    annotations = _load_jsonl(args.annotations)
+    annotation_paths = (
+        list(args.annotations)
+        if isinstance(args.annotations, list | tuple)
+        else [args.annotations]
+    )
+    annotations = [
+        row
+        for annotation_path in annotation_paths
+        for row in _load_jsonl(annotation_path)
+    ]
     if args.limit:
         annotations = annotations[: args.limit]
     data_root = args.data_root.expanduser().resolve()
     predictions = _prediction_map(args.predictions)
-    predictor = (
-        ModelPredictor(
-            args.model_path.expanduser().resolve(),
-            args.generation_mode,
-            args.max_new_tokens,
-            coord_mass_threshold,
-        )
-        if args.model_path
-        else None
-    )
+    predictor = None
+    if args.model_path:
+        model_path = args.model_path.expanduser().resolve()
+        if model_family == "realvlg":
+            predictor = RealVLGModelPredictor(
+                model_path,
+                args.max_new_tokens,
+                getattr(args, "realvlg_max_gpu_memory", None),
+                getattr(args, "realvlg_max_cpu_memory", None),
+            )
+        else:
+            predictor = ModelPredictor(
+                model_path,
+                args.generation_mode,
+                args.max_new_tokens,
+                coord_mass_threshold,
+            )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
@@ -301,7 +522,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             raw_output = str(row.get("raw_output", ""))
             latency = float(row.get("latency_seconds", 0.0))
 
-        parsed = parse_grasp_output(raw_output, width, height)
+        parsed = decode_prediction(raw_output, width, height, prediction_format)
         syntax_valid = parsed.status != "invalid"
         if is_positive:
             positive_format_valid_count += int(syntax_valid)
@@ -338,17 +559,27 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             results.append(result)
             continue
 
-        prediction = parsed.grasps[0]
-        pred_geometry = derive_grasp_geometry(
-            prediction.contacts_1000, width, height
-        )
-        pred_polygon = grasp_rectangle(
-            pred_geometry.contacts_pixels_float, args.rectangle_thickness
-        )
+        try:
+            pred_geometry = derive_evaluation_geometry(
+                parsed.contacts_1000,
+                width,
+                height,
+                allow_out_of_bounds=prediction_format == "realvlg",
+            )
+            pred_polygon = grasp_rectangle(
+                pred_geometry.contacts_pixels_float, args.rectangle_thickness
+            )
+        except ValueError as error:
+            valid_ious.append(0.0)
+            valid_corrected_acc.append(0)
+            valid_official_buggy_acc.append(0)
+            collision_unknown_count += 1
+            result["geometry_error"] = str(error)
+            result["collision_status"] = "unknown"
+            results.append(result)
+            continue
         full_polygon_area = polygon_area(pred_polygon)
-        inside_polygon_area = polygon_inside_image_area(
-            pred_polygon, width, height
-        )
+        inside_polygon_area = polygon_inside_image_area(pred_polygon, width, height)
         geometric_outside_ratio = (
             min(
                 1.0,
@@ -361,8 +592,13 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             else 0.0
         )
         geometric_outside_ratios.append(geometric_outside_ratio)
-        geometric_outside_count += int(
-            geometric_outside_ratio > args.outside_threshold
+        geometric_outside_count += int(geometric_outside_ratio > args.outside_threshold)
+        pred_pixels = pred_geometry.contacts_pixels_float
+        result.update(
+            {
+                "prediction_contacts_pixels": list(pred_pixels),
+                "outside_ratio_2d_geometry": geometric_outside_ratio,
+            }
         )
         gt_candidates = (
             annotation.get("evaluation_contact_candidates_pixels")
@@ -370,30 +606,54 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             or []
         )
         if not gt_candidates:
-            raise ValueError(f"positive sample {sample_id} has no pixel GT contacts")
+            valid_ious.append(0.0)
+            valid_corrected_acc.append(0)
+            valid_official_buggy_acc.append(0)
+            collision_unknown_count += 1
+            result["evaluation_error"] = "sample has no GT contact candidates"
+            result["collision_status"] = "unknown"
+            results.append(result)
+            continue
 
-        best_iou = -1.0
+        best_iou = 0.0
         best_gt: tuple[float, float, float, float] | None = None
         best_gt_geometry = None
         for raw_gt in gt_candidates:
-            gt = tuple(float(value) for value in raw_gt)
-            gt_token_space = (
-                gt[0] * 1000 / width,
-                gt[1] * 1000 / height,
-                gt[2] * 1000 / width,
-                gt[3] * 1000 / height,
-            )
-            gt_geometry = derive_grasp_geometry(gt_token_space, width, height)
-            gt_polygon = grasp_rectangle(
-                gt_geometry.contacts_pixels_float, args.rectangle_thickness
-            )
+            try:
+                gt = tuple(float(value) for value in raw_gt)
+                if len(gt) != 4:
+                    continue
+                gt_token_space = (
+                    gt[0] * 1000 / width,
+                    gt[1] * 1000 / height,
+                    gt[2] * 1000 / width,
+                    gt[3] * 1000 / height,
+                )
+                gt_geometry = derive_evaluation_geometry(
+                    gt_token_space,
+                    width,
+                    height,
+                    allow_out_of_bounds=True,
+                )
+                gt_polygon = grasp_rectangle(
+                    gt_geometry.contacts_pixels_float, args.rectangle_thickness
+                )
+            except (TypeError, ValueError):
+                continue
             overlap = polygon_iou(pred_polygon, gt_polygon)
             if overlap > best_iou:
                 best_iou = overlap
                 best_gt = gt
                 best_gt_geometry = gt_geometry
         if best_gt is None or best_gt_geometry is None:
-            raise ValueError(f"sample {sample_id} has no valid GT contacts")
+            valid_ious.append(0.0)
+            valid_corrected_acc.append(0)
+            valid_official_buggy_acc.append(0)
+            collision_unknown_count += 1
+            result["evaluation_error"] = "sample has no overlapping valid GT contacts"
+            result["collision_status"] = "unknown"
+            results.append(result)
+            continue
 
         corrected_angle = angular_error_degrees(
             pred_geometry.angle_radians_image,
@@ -404,16 +664,13 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             math.degrees(best_gt_geometry.angle_radians_image),
         )
         corrected = int(best_iou > 0.25 and corrected_angle < 30.0)
-        official_buggy = int(
-            best_iou > 0.25 and official_buggy_angle < 30.0
-        )
+        official_buggy = int(best_iou > 0.25 and official_buggy_angle < 30.0)
         valid_ious.append(best_iou)
         valid_corrected_acc.append(corrected)
         valid_official_buggy_acc.append(official_buggy)
         strict_iou_sum += best_iou
         strict_corrected_sum += corrected
 
-        pred_pixels = pred_geometry.contacts_pixels_float
         gt_center = (
             (best_gt[0] + best_gt[2]) * 0.5,
             (best_gt[1] + best_gt[3]) * 0.5,
@@ -424,8 +681,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         )
         endpoint_error = _swap_invariant_endpoint_error(pred_pixels, best_gt)
         width_error = abs(
-            pred_geometry.opening_width_pixels
-            - best_gt_geometry.opening_width_pixels
+            pred_geometry.opening_width_pixels - best_gt_geometry.opening_width_pixels
         )
         endpoint_errors.append(endpoint_error)
         angle_errors.append(corrected_angle)
@@ -433,7 +689,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         width_errors.append(width_error)
         result.update(
             {
-                "prediction_contacts_pixels": list(pred_pixels),
                 "matched_gt_contacts_pixels": list(best_gt),
                 "iou": best_iou,
                 "angle_error_corrected_degrees": corrected_angle,
@@ -443,7 +698,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "endpoint_error_pixels": endpoint_error,
                 "center_error_pixels": center_error,
                 "width_error_pixels": width_error,
-                "outside_ratio_2d_geometry": geometric_outside_ratio,
             }
         )
 
@@ -486,9 +740,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     metrics = {
         "positive_samples": positive_count,
         "negative_samples": negative_count,
-        "format_valid_rate": (
-            positive_format_valid_count / max(1, positive_count)
-        ),
+        "format_valid_rate": (positive_format_valid_count / max(1, positive_count)),
         "positive_grasp_output_rate": valid_count / max(1, positive_count),
         "negative_format_valid_rate": (
             negative_format_valid_count / max(1, negative_count)
@@ -513,9 +765,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "collision_evaluable_rate": collision_valid_count / max(1, positive_count),
         "collision_unknown_rate": collision_unknown_count / max(1, positive_count),
         "collision_rate_2d": (
-            collision_count / collision_valid_count
-            if collision_valid_count
-            else None
+            collision_count / collision_valid_count if collision_valid_count else None
         ),
         "mean_collision_ratio_2d": (
             collision_ratio_sum / collision_valid_count
@@ -523,9 +773,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             else None
         ),
         "mean_outside_ratio_2d": (
-            outside_ratio_sum / collision_valid_count
-            if collision_valid_count
-            else None
+            outside_ratio_sum / collision_valid_count if collision_valid_count else None
         ),
         "collision_aware_gacc_valid": (
             collision_aware_correct / collision_valid_count
@@ -541,22 +789,20 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "swap_invariant_angle_error_degrees": _metric_summary(angle_errors),
         "center_error_pixels": _metric_summary(center_errors),
         "width_error_pixels": _metric_summary(width_errors),
-        "outside_ratio_2d_geometry": _metric_summary(
-            geometric_outside_ratios
-        ),
+        "outside_ratio_2d_geometry": _metric_summary(geometric_outside_ratios),
         "outside_rate_2d_geometry": (
             geometric_outside_count / len(geometric_outside_ratios)
             if geometric_outside_ratios
             else None
         ),
-        "mean_latency_seconds": sum(
-            float(row["latency_seconds"]) for row in results
-        )
+        "mean_latency_seconds": sum(float(row["latency_seconds"]) for row in results)
         / max(1, len(results)),
         "rectangle_thickness_pixels": args.rectangle_thickness,
         "collision_threshold": args.collision_threshold,
         "outside_threshold": args.outside_threshold,
         "coord_mass_threshold": coord_mass_threshold,
+        "model_family": model_family,
+        "prediction_format": prediction_format,
     }
 
     output_path = args.output.expanduser().resolve()

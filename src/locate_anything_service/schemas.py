@@ -37,6 +37,31 @@ class GraspContact(BaseModel):
     collision_detail: str | None = None
 
 
+class GraspRectangle(BaseModel):
+    label: str | None = None
+    parameters_1000: tuple[float, float, float, float]
+    center_1000: tuple[float, float]
+    center_normalized: tuple[float, float]
+    center_pixels_float: tuple[float, float]
+    center_pixels: tuple[int, int]
+    angle_token: float
+    angle_degrees_image: float
+    angle_radians_image: float
+    opening_width_token: float
+    opening_width_pixels: float
+    opening_width_diagonal_normalized: float
+    gripper_depth_pixels: float
+    rectangle_points_pixels: tuple[int, int, int, int, int, int, int, int]
+    rectangle_points_pixels_float: tuple[
+        float, float, float, float, float, float, float, float
+    ]
+    collision_2d_status: Literal["free", "collision", "unknown"] = "unknown"
+    collision_ratio_2d: float | None = None
+    outside_ratio_2d: float | None = None
+    clearance_pixels_2d: float | None = None
+    collision_detail: str | None = None
+
+
 class LocateResponse(BaseModel):
     model: str
     mode: Literal[
@@ -50,6 +75,7 @@ class LocateResponse(BaseModel):
         "gui_point",
         "point",
         "grasp_contact",
+        "grasp_rect",
     ]
     generation_mode: Literal["fast", "hybrid", "slow"]
     prompt: str
@@ -59,9 +85,14 @@ class LocateResponse(BaseModel):
     boxes: list[Box] = Field(default_factory=list)
     points: list[Point] = Field(default_factory=list)
     grasps: list[GraspContact] = Field(default_factory=list)
+    grasp_rectangles: list[GraspRectangle] = Field(default_factory=list)
     grasp_status: Literal["ok", "none", "invalid"] | None = None
     grasp_parse_error: str | None = None
-    generation_stats: dict[str, float | int] | None = None
+    grasp_rect_status: Literal[
+        "ok", "none", "invalid_structure", "invalid_geometry"
+    ] | None = None
+    grasp_rect_parse_error: str | None = None
+    generation_stats: dict[str, bool | int | float] | None = None
     annotated_image_base64: str | None = None
 
 

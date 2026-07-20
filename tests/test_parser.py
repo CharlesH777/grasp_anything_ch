@@ -1,6 +1,12 @@
 import math
 
-from locate_anything_service.parser import parse_grasp_output, parse_output
+import pytest
+
+from locate_anything_service.parser import (
+    parse_grasp_output,
+    parse_grasp_rect_output,
+    parse_output,
+)
 
 
 def test_parse_box_coordinates() -> None:
@@ -94,3 +100,47 @@ def test_parse_grasp_rejects_out_of_range_and_coincident_contacts() -> None:
 
     assert out_of_range.status == "invalid"
     assert coincident.status == "invalid"
+
+
+def test_parse_grasp_rect_decodes_center_angle_width_and_points() -> None:
+    parsed = parse_grasp_rect_output(
+        "<ref>grasp pose</ref>"
+        "<grasp_rect><500><250><0><400></grasp_rect>",
+        200,
+        100,
+    )
+
+    assert parsed.status == "ok"
+    assert parsed.error is None
+    assert len(parsed.rectangles) == 1
+    rectangle = parsed.rectangles[0]
+    assert rectangle.label == "grasp pose"
+    assert rectangle.center_pixels == (100, 25)
+    assert rectangle.angle_degrees_image == 0
+    assert rectangle.opening_width_pixels == pytest.approx(0.4 * math.hypot(200, 100))
+    assert len(rectangle.rectangle_points_pixels) == 8
+
+
+def test_parse_grasp_rect_none_is_distinct_from_invalid() -> None:
+    none_result = parse_grasp_rect_output(
+        "<grasp_rect>none</grasp_rect>", 100, 100
+    )
+    invalid_result = parse_grasp_rect_output(
+        "<grasp_rect><500><500><0><0></grasp_rect>", 100, 100
+    )
+
+    assert none_result.status == "none"
+    assert invalid_result.status == "invalid_geometry"
+    assert "exceed" in (invalid_result.error or "")
+
+
+def test_parse_grasp_rect_rejects_contact_or_trailing_coordinates() -> None:
+    legacy = parse_grasp_rect_output(
+        "<grasp><500><500><0><400></grasp>", 100, 100
+    )
+    trailing = parse_grasp_rect_output(
+        "<grasp_rect><500><500><0><400></grasp_rect><9>", 100, 100
+    )
+
+    assert legacy.status == "invalid_structure"
+    assert trailing.status == "invalid_structure"

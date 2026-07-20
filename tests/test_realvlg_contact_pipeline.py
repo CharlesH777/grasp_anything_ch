@@ -28,9 +28,7 @@ validator = _load_script("validate_training_meta")
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
-    )
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
 
 def _make_dataset(tmp_path: Path) -> tuple[Path, Path]:
@@ -294,9 +292,7 @@ def test_converter_emits_no_grasp_only_for_exhaustive_unsafe_candidates(
     assert left["task_type"] == "grasp_contact_negative"
     assert left["negative_reason"] == "ungraspable"
     assert left["contact_candidates"] == []
-    assert left["conversations"][1]["value"].endswith(
-        "<grasp>none</grasp>"
-    )
+    assert left["conversations"][1]["value"].endswith("<grasp>none</grasp>")
     validator._validate_contact_row(left, "synthetic", output, 1)
 
 
@@ -392,6 +388,192 @@ def test_official_buggy_angle_metric_is_explicitly_not_the_main_metric() -> None
     assert official_buggy > 50.0
 
 
+def test_realvlg_contact_output_decodes_absolute_pixel_coordinates() -> None:
+    parsed = evaluator.decode_prediction(
+        "<think>target</think><answer>(20,50),(80,50)</answer>",
+        width=100,
+        height=100,
+        prediction_format="realvlg",
+    )
+
+    assert parsed.status == "ok"
+    assert parsed.contacts_1000 == (200.0, 500.0, 800.0, 500.0)
+
+
+def test_evaluator_scores_realvlg_predictions_with_shared_geometry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    Image.new("RGB", (100, 100), "white").save(root / "image.png")
+    annotations = tmp_path / "annotations.jsonl"
+    predictions = tmp_path / "predictions.jsonl"
+    _write_jsonl(
+        annotations,
+        [
+            {
+                "sample_id": "realvlg",
+                "task_type": "grasp_contact",
+                "image": "image.png",
+                "image_width": 100,
+                "image_height": 100,
+                "contact_candidates_pixels": [[20, 50, 80, 50]],
+                "collision_valid": False,
+            }
+        ],
+    )
+    _write_jsonl(
+        predictions,
+        [
+            {
+                "sample_id": "realvlg",
+                "raw_output": "<answer>(20,50),(80,50)</answer>",
+            }
+        ],
+    )
+    args = argparse.Namespace(
+        annotations=annotations,
+        data_root=root,
+        predictions=predictions,
+        model_path=None,
+        model_family="realvlg",
+        prediction_format="realvlg",
+        output=tmp_path / "output.jsonl",
+        metrics=tmp_path / "metrics.json",
+        generation_mode="fast",
+        max_new_tokens=128,
+        coord_mass_threshold=1e-4,
+        rectangle_thickness=20.0,
+        collision_threshold=0.0,
+        outside_threshold=0.0,
+        seed=42,
+        limit=None,
+    )
+
+    metrics = evaluator.evaluate(args)
+
+    assert metrics["format_valid_rate"] == 1.0
+    assert metrics["miou_strict"] == pytest.approx(1.0)
+    assert metrics["gacc_corrected_strict"] == 1.0
+    assert metrics["prediction_format"] == "realvlg"
+
+
+def test_evaluator_keeps_out_of_bounds_realvlg_output_valid(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    Image.new("RGB", (100, 100), "white").save(root / "image.png")
+    annotations = tmp_path / "annotations.jsonl"
+    predictions = tmp_path / "predictions.jsonl"
+    _write_jsonl(
+        annotations,
+        [
+            {
+                "sample_id": "outside",
+                "task_type": "grasp_contact",
+                "image": "image.png",
+                "image_width": 100,
+                "image_height": 100,
+                "contact_candidates_pixels": [[20, 50, 80, 50]],
+                "collision_valid": False,
+            }
+        ],
+    )
+    _write_jsonl(
+        predictions,
+        [
+            {
+                "sample_id": "outside",
+                "raw_output": "<answer>(120,50),(180,50)</answer>",
+            }
+        ],
+    )
+    args = argparse.Namespace(
+        annotations=annotations,
+        data_root=root,
+        predictions=predictions,
+        model_path=None,
+        model_family="realvlg",
+        prediction_format="realvlg",
+        output=tmp_path / "output.jsonl",
+        metrics=tmp_path / "metrics.json",
+        generation_mode="fast",
+        max_new_tokens=128,
+        coord_mass_threshold=1e-4,
+        rectangle_thickness=20.0,
+        collision_threshold=0.0,
+        outside_threshold=0.0,
+        seed=42,
+        limit=None,
+    )
+
+    metrics = evaluator.evaluate(args)
+
+    assert metrics["format_valid_rate"] == 1.0
+    assert metrics["positive_grasp_output_rate"] == 1.0
+    assert metrics["miou_strict"] == 0.0
+    assert metrics["gacc_corrected_strict"] == 0.0
+    result = json.loads(args.output.read_text(encoding="utf-8"))
+    assert result["prediction_contacts_pixels"] == [120.0, 50.0, 180.0, 50.0]
+
+
+def test_evaluator_matches_out_of_bounds_raw_gt_without_clipping(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    Image.new("RGB", (100, 100), "white").save(root / "image.png")
+    annotations = tmp_path / "annotations.jsonl"
+    predictions = tmp_path / "predictions.jsonl"
+    _write_jsonl(
+        annotations,
+        [
+            {
+                "sample_id": "outside-match",
+                "task_type": "grasp_contact",
+                "image": "image.png",
+                "image_width": 100,
+                "image_height": 100,
+                "evaluation_contact_candidates_pixels": [[120, 50, 180, 50]],
+                "collision_valid": False,
+            }
+        ],
+    )
+    _write_jsonl(
+        predictions,
+        [
+            {
+                "sample_id": "outside-match",
+                "raw_output": "<answer>(120,50),(180,50)</answer>",
+            }
+        ],
+    )
+    args = argparse.Namespace(
+        annotations=annotations,
+        data_root=root,
+        predictions=predictions,
+        model_path=None,
+        model_family="realvlg",
+        prediction_format="realvlg",
+        output=tmp_path / "output.jsonl",
+        metrics=tmp_path / "metrics.json",
+        generation_mode="fast",
+        max_new_tokens=128,
+        coord_mass_threshold=1e-4,
+        rectangle_thickness=20.0,
+        collision_threshold=0.0,
+        outside_threshold=0.0,
+        seed=42,
+        limit=None,
+    )
+
+    metrics = evaluator.evaluate(args)
+
+    assert metrics["miou_strict"] == pytest.approx(1.0)
+    assert metrics["gacc_corrected_strict"] == 1.0
+
+
 def test_none_is_valid_syntax_but_not_a_positive_grasp_output(
     tmp_path: Path,
 ) -> None:
@@ -478,9 +660,7 @@ def test_official_eval_conversion_uses_kinect_0000_only(tmp_path: Path) -> None:
                 [30, 0, 70, 0],
             ],
         }
-        (metadata / f"{frame}.json").write_text(
-            json.dumps([row]), encoding="utf-8"
-        )
+        (metadata / f"{frame}.json").write_text(json.dumps([row]), encoding="utf-8")
 
     output = tmp_path / "seen.jsonl"
     args = argparse.Namespace(
@@ -513,9 +693,7 @@ def test_official_eval_conversion_uses_kinect_0000_only(tmp_path: Path) -> None:
     assert rows[0]["task_type"] == "grasp_contact"
     assert len(rows[0]["contact_candidates_pixels"]) == 1
     assert len(rows[0]["evaluation_contact_candidates_pixels"]) == 3
-    assert [10.0, 0.0, 90.0, 0.0] in rows[0][
-        "evaluation_contact_candidates_pixels"
-    ]
+    assert [10.0, 0.0, 90.0, 0.0] in rows[0]["evaluation_contact_candidates_pixels"]
     with pytest.raises(ValueError, match="evaluation-only"):
         validator._validate_contact_row(rows[0], "synthetic", output, 1)
 

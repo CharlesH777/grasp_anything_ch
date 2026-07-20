@@ -4,7 +4,7 @@ set -euo pipefail
 training_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 eagle_root="${EAGLE_ROOT:-${training_dir}/Eagle}"
 revision_file="${training_dir}/EAGLE_REVISION"
-patch_file="${training_dir}/patches/locateanything-grasp-contact.patch"
+task=contact
 repository="${EAGLE_REPOSITORY:-https://github.com/NVlabs/Eagle.git}"
 allow_clone=1
 created_checkout=0
@@ -19,12 +19,17 @@ while (( $# > 0 )); do
       allow_clone=0
       shift
       ;;
+    --task)
+      task="$2"
+      shift 2
+      ;;
     -h|--help)
       cat <<'EOF'
 Usage: bootstrap_eagle.sh [--eagle-root PATH] [--no-clone]
+                          [--task contact|grasp-rect]
 
 Clone the pinned NVIDIA Eagle revision when needed and apply the tracked
-grasp-contact patch. Existing unrelated Eagle modifications are rejected.
+task patch. Existing unrelated Eagle modifications are rejected.
 EOF
       exit 0
       ;;
@@ -34,6 +39,21 @@ EOF
       ;;
   esac
 done
+
+case "${task}" in
+  contact)
+    patch_file="${training_dir}/patches/locateanything-grasp-contact.patch"
+    patch_label="grasp-contact"
+    ;;
+  grasp-rect)
+    patch_file="${training_dir}/patches/locateanything-grasp-rect.patch"
+    patch_label="grasp-rect"
+    ;;
+  *)
+    echo "Unsupported Eagle task patch: ${task}" >&2
+    exit 2
+    ;;
+esac
 
 [[ -s "${revision_file}" ]] || { echo "Missing ${revision_file}" >&2; exit 1; }
 [[ -s "${patch_file}" ]] || { echo "Missing ${patch_file}" >&2; exit 1; }
@@ -83,14 +103,14 @@ if git -C "${eagle_root}" apply --reverse --check "${patch_file}" >/dev/null 2>&
     echo "${unexpected_paths}" >&2
     exit 1
   fi
-  echo "Eagle grasp-contact patch is already applied (${expected_revision})."
+  echo "Eagle ${patch_label} patch is already applied (${expected_revision})."
 elif git -C "${eagle_root}" apply --check "${patch_file}" >/dev/null 2>&1; then
   if [[ -n "$(git -C "${eagle_root}" status --porcelain)" ]]; then
     echo "Eagle contains unrelated local changes; refusing to apply the patch." >&2
     exit 1
   fi
   git -C "${eagle_root}" apply "${patch_file}"
-  echo "Applied grasp-contact patch to Eagle ${expected_revision}."
+  echo "Applied ${patch_label} patch to Eagle ${expected_revision}."
 else
   echo "Eagle does not match the pinned clean or fully patched state." >&2
   echo "Checkout: ${eagle_root}" >&2

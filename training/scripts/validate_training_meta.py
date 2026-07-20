@@ -132,12 +132,115 @@ def _validate_contact_row(
             )
 
 
+def _validate_grasp_rect_row(
+    row: dict[str, Any],
+    dataset_name: str,
+    path: Path,
+    line_number: int,
+    effective_task_type: str,
+    minimum_width_diagonal: float,
+) -> None:
+    prefix = f"dataset '{dataset_name}' {path}:{line_number}"
+    if effective_task_type == "grasp_rect":
+        width = row.get("image_width")
+        height = row.get("image_height")
+        if not isinstance(width, int | float) or width <= 0:
+            fail(f"{prefix} needs a positive image_width")
+        if not isinstance(height, int | float) or height <= 0:
+            fail(f"{prefix} needs a positive image_height")
+        depth = row.get("gripper_depth_pixels")
+        if (
+            isinstance(depth, bool)
+            or not isinstance(depth, int | float)
+            or not math.isfinite(float(depth))
+            or depth <= 0
+        ):
+            fail(f"{prefix} needs a positive finite gripper_depth_pixels")
+        candidates = row.get("grasp_rect_candidates")
+        if not isinstance(candidates, list) or not candidates:
+            fail(f"{prefix} needs at least one grasp_rect candidate")
+        for candidate_index, candidate in enumerate(candidates):
+            if not isinstance(candidate, list | tuple) or len(candidate) != 4:
+                fail(
+                    f"{prefix} candidate {candidate_index} must have four values"
+                )
+            if not all(
+                isinstance(value, int | float)
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and float(value).is_integer()
+                and 0 <= value <= 1000
+                for value in candidate
+            ):
+                fail(
+                    f"{prefix} candidate {candidate_index} must contain integer "
+                    "token values in [0, 1000]"
+                )
+            if candidate[3] / 1000.0 <= minimum_width_diagonal:
+                fail(
+                    f"{prefix} candidate {candidate_index} width must strictly "
+                    "exceed minimum_width_diagonal"
+                )
+        outside_scores = row.get("candidate_outside_2d", [])
+        if len(outside_scores) < len(candidates) or not all(
+            isinstance(value, int | float)
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and 0.0 <= value <= 1.0
+            for value in outside_scores[: len(candidates)]
+        ):
+            fail(f"{prefix} requires one candidate_outside_2d score per candidate")
+        collision_scores = row.get("candidate_collision_2d", [])
+        if row.get("collision_valid") and (
+            len(collision_scores) < len(candidates)
+            or not all(
+                isinstance(value, int | float)
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and 0.0 <= value <= 1.0
+                for value in collision_scores[: len(candidates)]
+            )
+        ):
+            fail(
+                f"{prefix} collision_valid requires one [0, 1] score per candidate"
+            )
+        assistant_text = "".join(
+            str(message.get("value", ""))
+            for message in row.get("conversations", [])
+            if message.get("from") == "gpt"
+        )
+        expected = "<grasp_rect>" + "".join(
+            f"<{int(value)}>" for value in candidates[0]
+        ) + "</grasp_rect>"
+        if assistant_text.count(expected) != 1:
+            fail(
+                f"{prefix} assistant target does not match "
+                "grasp_rect_candidates[0]"
+            )
+    elif effective_task_type == "grasp_rect_negative":
+        if row.get("grasp_rect_candidates") not in (None, []):
+            fail(f"{prefix} negative row must not contain grasp_rect candidates")
+        if row.get("negative_reason") not in {"no_target", "ungraspable"}:
+            fail(f"{prefix} has an unsupported negative_reason")
+        assistant_text = "".join(
+            str(message.get("value", ""))
+            for message in row.get("conversations", [])
+            if message.get("from") == "gpt"
+        )
+        if assistant_text.count("<grasp_rect>none</grasp_rect>") != 1:
+            fail(
+                f"{prefix} negative target must contain exactly one "
+                "<grasp_rect>none</grasp_rect>"
+            )
+
+
 def validate_jsonl(
     path: Path,
     dataset_name: str,
     configured_task_type: str | None,
     collision_threshold: float | None = None,
     outside_threshold: float | None = None,
+    grasp_rect_minimum_width_diagonal: float = 1e-4,
 ) -> Counter[str]:
     if not path.is_absolute():
         fail(f"dataset '{dataset_name}' annotation must be an absolute path: {path}")
@@ -169,6 +272,8 @@ def validate_jsonl(
                     "grounding",
                     "grasp_contact",
                     "grasp_contact_negative",
+                    "grasp_rect",
+                    "grasp_rect_negative",
                 }:
                     fail(
                         f"dataset '{dataset_name}' {path}:{line_number} has "
@@ -203,6 +308,14 @@ def validate_jsonl(
                     collision_threshold,
                     outside_threshold,
                 )
+                _validate_grasp_rect_row(
+                    sample,
+                    dataset_name,
+                    path,
+                    line_number,
+                    effective_task_type,
+                    grasp_rect_minimum_width_diagonal,
+                )
                 sample_count += 1
                 task_counts[effective_task_type] += 1
     except OSError as error:
@@ -223,11 +336,18 @@ def validate_meta(
     min_contact_fraction: float = 0.0,
     min_grounding_fraction: float = 0.0,
     min_negative_fraction: float = 0.0,
+    min_grasp_rect_samples: int = 0,
+    min_grasp_rect_negative_samples: int = 0,
+    min_grasp_rect_fraction: float = 0.0,
+    min_grasp_rect_negative_fraction: float = 0.0,
+    grasp_rect_minimum_width_diagonal: float = 1e-4,
 ) -> ValidationSummary:
     minimums = {
         "grasp_contact": min_contact_samples,
         "grounding": min_grounding_samples,
         "grasp_contact_negative": min_negative_samples,
+        "grasp_rect": min_grasp_rect_samples,
+        "grasp_rect_negative": min_grasp_rect_negative_samples,
     }
     for task_type, minimum in minimums.items():
         if minimum < 0:
@@ -236,6 +356,8 @@ def validate_meta(
         "grasp_contact": min_contact_fraction,
         "grounding": min_grounding_fraction,
         "grasp_contact_negative": min_negative_fraction,
+        "grasp_rect": min_grasp_rect_fraction,
+        "grasp_rect_negative": min_grasp_rect_negative_fraction,
     }
     for task_type, minimum in minimum_fractions.items():
         if not math.isfinite(minimum) or not 0.0 <= minimum <= 1.0:
@@ -261,6 +383,8 @@ def validate_meta(
             "grounding",
             "grasp_contact",
             "grasp_contact_negative",
+            "grasp_rect",
+            "grasp_rect_negative",
         }
         if task_type not in supported_task_types:
             fail(f"dataset '{dataset_name}' has unsupported task_type={task_type!r}")
@@ -318,6 +442,7 @@ def validate_meta(
                     task_type,
                     collision_threshold,
                     outside_threshold,
+                    grasp_rect_minimum_width_diagonal,
                 )
             )
         source_total = sum(dataset_counts.values())
@@ -399,6 +524,17 @@ def main() -> int:
     parser.add_argument("--min-contact-fraction", type=float, default=0.0)
     parser.add_argument("--min-grounding-fraction", type=float, default=0.0)
     parser.add_argument("--min-negative-fraction", type=float, default=0.0)
+    parser.add_argument("--min-grasp-rect-samples", type=int, default=0)
+    parser.add_argument(
+        "--min-grasp-rect-negative-samples", type=int, default=0
+    )
+    parser.add_argument("--min-grasp-rect-fraction", type=float, default=0.0)
+    parser.add_argument(
+        "--min-grasp-rect-negative-fraction", type=float, default=0.0
+    )
+    parser.add_argument(
+        "--grasp-rect-minimum-width-diagonal", type=float, default=1e-4
+    )
     args = parser.parse_args()
 
     try:
@@ -406,6 +542,8 @@ def main() -> int:
             value = getattr(args, name)
             if value is not None and not 0.0 <= value <= 1.0:
                 fail(f"{name} must be in [0, 1]")
+        if not 0.0 <= args.grasp_rect_minimum_width_diagonal <= 1.0:
+            fail("grasp_rect_minimum_width_diagonal must be in [0, 1]")
         summary = validate_meta(
             args.meta_path.expanduser().resolve(),
             args.collision_threshold,
@@ -416,6 +554,11 @@ def main() -> int:
             args.min_contact_fraction,
             args.min_grounding_fraction,
             args.min_negative_fraction,
+            args.min_grasp_rect_samples,
+            args.min_grasp_rect_negative_samples,
+            args.min_grasp_rect_fraction,
+            args.min_grasp_rect_negative_fraction,
+            args.grasp_rect_minimum_width_diagonal,
         )
     except ValueError as error:
         print(f"Training data validation failed: {error}", file=sys.stderr)

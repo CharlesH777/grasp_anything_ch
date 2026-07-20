@@ -27,6 +27,8 @@ class _Tokenizer:
         "</box>": 11,
         "<grasp>": 12,
         "</grasp>": 13,
+        "<grasp_rect>": 14,
+        "</grasp_rect>": 15,
         "<0>": 100,
         "<1000>": 1100,
     }
@@ -41,6 +43,8 @@ def _dataset() -> LazySupervisedDatasetMTP:
     dataset.block_size = 6
     dataset.task_type = "grasp_contact"
     dataset.max_contact_candidates = 3
+    dataset.max_grasp_rect_candidates = 3
+    dataset.grasp_rect_minimum_width_diagonal = 1e-4
     dataset.contact_collision_threshold = 0.0
     dataset.contact_outside_threshold = 0.0
     return dataset
@@ -91,7 +95,65 @@ def test_grasp_end_token_uses_structured_mtp_branch() -> None:
     ).read_text(encoding="utf-8")
 
     assert "has_grasp = (input_ids == grasp_end_id).any().item()" in source
-    assert "if not (has_box or has_ref or has_grasp):" in source
+    assert "has_grasp_rect = (input_ids == grasp_rect_end_id).any().item()" in source
+
+
+def test_grasp_rect_mtp_mask_marks_four_semantic_parameter_slots() -> None:
+    dataset = _dataset()
+    labels = torch.tensor(
+        [
+            IGNORE_TOKEN_ID,
+            IGNORE_TOKEN_ID,
+            1,
+            2,
+            3,
+            IGNORE_TOKEN_ID,
+            14,
+            600,
+            500,
+            100,
+            400,
+            15,
+        ]
+    )
+
+    mask = dataset._grasp_rect_mtp_coordinate_mask(
+        labels, original_length=5, task_type="grasp_rect"
+    )
+
+    assert mask.nonzero(as_tuple=False).flatten().tolist() == [7, 8, 9, 10]
+
+
+def test_grasp_rect_fields_are_independent_from_contact_fields() -> None:
+    dataset = _dataset()
+    dataset.task_type = "grasp_rect"
+    row = {
+        "task_type": "grasp_rect",
+        "image_width": 640,
+        "image_height": 480,
+        "grasp_rect_candidates": [[500, 400, 1000, 250]],
+        "gripper_depth_pixels": 40.0,
+        "candidate_collision_2d": [None],
+        "candidate_outside_2d": [0.0],
+        "collision_valid": False,
+        "conversations": [
+            {
+                "from": "gpt",
+                "value": (
+                    "<grasp_rect><500><400><1000><250></grasp_rect>"
+                ),
+            }
+        ],
+    }
+
+    rect_fields = dataset._grasp_rect_fields(row)
+    contact_fields = dataset._contact_fields(row)
+
+    assert rect_fields["grasp_rect_candidate_mask"].tolist() == [
+        [True, False, False]
+    ]
+    assert rect_fields["grasp_rect_positive_mask"].tolist() == [True]
+    assert contact_fields["contact_positive_mask"].tolist() == [False]
 
 
 def test_contact_fields_are_fixed_shape_and_keep_collision_unknown() -> None:
@@ -170,6 +232,16 @@ def test_packed_collator_preserves_contact_rows_and_label_alignment() -> None:
         "candidate_outside_2d": torch.tensor([[0.0]]),
         "collision_valid": torch.tensor([True]),
         "contact_task_code": torch.tensor([1]),
+        "grasp_rect_mtp_coord_mask": torch.zeros(length, dtype=torch.bool),
+        "grasp_rect_candidates": torch.zeros((1, 1, 4), dtype=torch.long),
+        "grasp_rect_candidate_mask": torch.tensor([[False]]),
+        "grasp_rect_positive_mask": torch.tensor([False]),
+        "grasp_rect_image_size": torch.tensor([[1.0, 1.0]]),
+        "grasp_rect_gripper_depth": torch.tensor([40.0]),
+        "grasp_rect_candidate_collision_2d": torch.tensor([[float("nan")]]),
+        "grasp_rect_candidate_outside_2d": torch.tensor([[float("nan")]]),
+        "grasp_rect_collision_valid": torch.tensor([False]),
+        "grasp_rect_task_code": torch.tensor([0]),
     }
 
     batch = packed_collate_fn_mtp([feature])
@@ -206,6 +278,20 @@ def test_packed_collator_combines_two_features_without_cross_sample_labels() -> 
             "candidate_outside_2d": torch.tensor([[0.0]]),
             "collision_valid": torch.tensor([True]),
             "contact_task_code": torch.tensor([1]),
+            "grasp_rect_mtp_coord_mask": torch.zeros(length, dtype=torch.bool),
+            "grasp_rect_candidates": torch.zeros((1, 1, 4), dtype=torch.long),
+            "grasp_rect_candidate_mask": torch.tensor([[False]]),
+            "grasp_rect_positive_mask": torch.tensor([False]),
+            "grasp_rect_image_size": torch.tensor([[1.0, 1.0]]),
+            "grasp_rect_gripper_depth": torch.tensor([40.0]),
+            "grasp_rect_candidate_collision_2d": torch.tensor(
+                [[float("nan")]]
+            ),
+            "grasp_rect_candidate_outside_2d": torch.tensor(
+                [[float("nan")]]
+            ),
+            "grasp_rect_collision_valid": torch.tensor([False]),
+            "grasp_rect_task_code": torch.tensor([0]),
             "_worker_key": "worker_0",
             "_batch_idx": batch_idx,
             "_state_snapshot": {"batch": batch_idx},
@@ -288,7 +374,9 @@ def test_accumulation_window_counts_are_shared_with_every_microbatch() -> None:
 
     assert ce_count.item() == 5
     assert trainer._seen_contact_blocks == 3
-    assert trainer._last_window_counts.tolist() == [5, 1, 0, 0, 1, 2]
+    assert trainer._last_window_counts.tolist() == [
+        5, 1, 0, 0, 1, 2, 0, 0, 0
+    ]
     assert trainer._last_geometry_scale == 0.5
     for batch in batches:
         assert batch["global_ce_tokens_in_window"].item() == 5
@@ -426,3 +514,32 @@ def test_loss_breakdown_aggregates_microbatches_per_optimizer_window() -> None:
     assert logs["contact/loss_total"] == pytest.approx(1.5)
     assert logs["contact/base_loss_sum"] == pytest.approx(25.0)
     assert logs["contact/coord_mass_min"] == pytest.approx(0.5)
+
+
+def test_rect_quality_breakdown_uses_min_and_max_reductions() -> None:
+    trainer = StreamPackingMTPTrainer.__new__(StreamPackingMTPTrainer)
+    trainer._loss_breakdown_window = {}
+    trainer._loss_breakdown_steps = set()
+
+    trainer._accumulate_loss_breakdown(
+        {
+            "grasp_rect_coord_mass_min": torch.tensor(0.8),
+            "grasp_rect_angle_resultant_min": torch.tensor(0.7),
+            "grasp_rect_coord_entropy_max": torch.tensor(0.2),
+        },
+        optimizer_step=1,
+    )
+    trainer._accumulate_loss_breakdown(
+        {
+            "grasp_rect_coord_mass_min": torch.tensor(0.4),
+            "grasp_rect_angle_resultant_min": torch.tensor(0.5),
+            "grasp_rect_coord_entropy_max": torch.tensor(0.9),
+        },
+        optimizer_step=1,
+    )
+
+    logs = trainer._consume_loss_breakdown()
+
+    assert logs["grasp_rect/coord_mass_min"] == pytest.approx(0.4)
+    assert logs["grasp_rect/angle_resultant_min"] == pytest.approx(0.5)
+    assert logs["grasp_rect/coord_entropy_max"] == pytest.approx(0.9)

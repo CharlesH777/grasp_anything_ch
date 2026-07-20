@@ -24,3 +24,17 @@ def test_settings_reads_required_grasp_checkpoint(monkeypatch) -> None:
     monkeypatch.setenv("LOCATE_REQUIRE_GRASP_CHECKPOINT", "1")
 
     assert Settings.from_env().require_grasp_checkpoint is True
+
+
+def test_settings_reads_grasp_rect_geometry(monkeypatch) -> None:
+    monkeypatch.setenv("LOCATE_REQUIRE_GRASP_RECT_CHECKPOINT", "1")
+    monkeypatch.setenv("LOCATE_GRASP_RECT_MINIMUM_WIDTH_DIAGONAL", "0.02")
+    monkeypatch.setenv("LOCATE_GRASP_RECT_COORD_ENTROPY_THRESHOLD", "0.8")
+    monkeypatch.setenv("LOCATE_GRASP_RECT_GRIPPER_DEPTH_PIXELS", "42")
+
+    settings = Settings.from_env()
+
+    assert settings.require_grasp_rect_checkpoint is True
+    assert settings.grasp_rect_minimum_width_diagonal == 0.02
+    assert settings.grasp_rect_decode_coord_entropy_threshold == 0.8
+    assert settings.grasp_rect_gripper_depth_pixels == 42

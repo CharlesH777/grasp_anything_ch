@@ -10,11 +10,13 @@ from PIL import Image
 from .collision_2d import (
     CollisionMaskProvider,
     evaluate_collision_2d,
+    evaluate_grasp_rectangle_collision_2d,
     unknown_collision,
 )
 from .config import Settings
 from .grasp_geometry import derive_grasp_geometry
-from .parser import parse_grasp_output, parse_output
+from .grasp_rect_geometry import derive_grasp_rectangle_geometry
+from .parser import parse_grasp_output, parse_grasp_rect_output, parse_output
 from .prompts import PromptMode, build_prompt
 from .schemas import LocateResponse
 from .visualization import annotate_image
@@ -112,6 +114,19 @@ class LocateAnythingRuntime:
                             "LOCATE_REQUIRE_GRASP_CHECKPOINT=1 but the model "
                             "does not define two distinct grasp_task_token_ids"
                         )
+                if self.settings.require_grasp_rect_checkpoint:
+                    task_token_ids = getattr(
+                        worker.config, "grasp_rect_task_token_ids", None
+                    )
+                    if (
+                        not isinstance(task_token_ids, list)
+                        or len(task_token_ids) != 2
+                        or task_token_ids[0] == task_token_ids[1]
+                    ):
+                        raise RuntimeError(
+                            "LOCATE_REQUIRE_GRASP_RECT_CHECKPOINT=1 but the model "
+                            "does not define two distinct grasp_rect_task_token_ids"
+                        )
                 worker = worker.to(device).eval()
 
                 self._device = device
@@ -178,17 +193,34 @@ class LocateAnythingRuntime:
             "repetition_penalty": 1.1,
             "verbose": False,
         }
-        if mode == "grasp_contact":
+        if mode in {"grasp_contact", "grasp_rect"}:
             generate_kwargs.update(
                 do_sample=False,
                 temperature=0.0,
                 top_p=None,
+                return_generation_stats=True,
             )
-            generate_kwargs["geometry_type"] = "contact"
+            generate_kwargs["geometry_type"] = (
+                "contact" if mode == "grasp_contact" else "grasp_rect"
+            )
             generate_kwargs["image_size"] = (width, height)
-            generate_kwargs["contact_coord_mass_threshold"] = (
-                self.settings.contact_decode_coord_mass_threshold
-            )
+            if mode == "grasp_contact":
+                generate_kwargs["contact_coord_mass_threshold"] = (
+                    self.settings.contact_decode_coord_mass_threshold
+                )
+            else:
+                generate_kwargs["grasp_rect_coord_mass_threshold"] = (
+                    self.settings.grasp_rect_decode_coord_mass_threshold
+                )
+                generate_kwargs["grasp_rect_coord_entropy_threshold"] = (
+                    self.settings.grasp_rect_decode_coord_entropy_threshold
+                )
+                generate_kwargs["grasp_rect_minimum_width_diagonal"] = (
+                    self.settings.grasp_rect_minimum_width_diagonal
+                )
+                generate_kwargs["grasp_rect_gripper_depth_pixels"] = (
+                    self.settings.grasp_rect_gripper_depth_pixels
+                )
             if selected_generation_mode in {"fast", "hybrid"}:
                 generate_kwargs["n_future_tokens"] = 6
 
@@ -196,7 +228,14 @@ class LocateAnythingRuntime:
             generation_started = time.perf_counter()
             response = self._worker.generate(**generate_kwargs)
             generation_seconds = time.perf_counter() - generation_started
-        raw_output = response[0] if isinstance(response, tuple) else response
+        worker_generation_stats = {}
+        if isinstance(response, tuple):
+            for item in response[1:]:
+                if isinstance(item, dict):
+                    worker_generation_stats.update(item)
+            raw_output = response[0]
+        else:
+            raw_output = response
         if isinstance(raw_output, list):
             raw_output = raw_output[0]
         if not isinstance(raw_output, str):
@@ -205,13 +244,18 @@ class LocateAnythingRuntime:
             "generation_seconds": round(generation_seconds, 6),
             "box_count": raw_output.count("<box>"),
             "grasp_count": raw_output.count("<grasp>"),
+            "grasp_rect_count": raw_output.count("<grasp_rect>"),
+            **worker_generation_stats,
         }
 
         boxes = []
         points = []
         grasps = []
+        grasp_rectangles = []
         grasp_status = None
         grasp_parse_error = None
+        grasp_rect_status = None
+        grasp_rect_parse_error = None
         if mode == "grasp_contact":
             parsed_grasp = parse_grasp_output(raw_output, width, height)
             grasp_status = parsed_grasp.status
@@ -260,13 +304,75 @@ class LocateAnythingRuntime:
                 generation_stats["collision_check_seconds"] = round(
                     time.perf_counter() - collision_started, 6
                 )
+        elif mode == "grasp_rect":
+            parsed_rect = parse_grasp_rect_output(
+                raw_output,
+                width,
+                height,
+                gripper_depth_pixels=(
+                    self.settings.grasp_rect_gripper_depth_pixels
+                ),
+                minimum_width_diagonal=(
+                    self.settings.grasp_rect_minimum_width_diagonal
+                ),
+            )
+            grasp_rect_status = parsed_rect.status
+            grasp_rect_parse_error = parsed_rect.error
+            grasp_rectangles = parsed_rect.rectangles
+            if grasp_rectangles:
+                collision_started = time.perf_counter()
+                collision = unknown_collision("no collision mask provider configured")
+                if self._collision_mask_provider is not None:
+                    try:
+                        masks = self._collision_mask_provider(image, query)
+                        geometry = derive_grasp_rectangle_geometry(
+                            grasp_rectangles[0].parameters_1000,
+                            width,
+                            height,
+                            gripper_depth_pixels=(
+                                self.settings.grasp_rect_gripper_depth_pixels
+                            ),
+                            minimum_width_diagonal=(
+                                self.settings.grasp_rect_minimum_width_diagonal
+                            ),
+                        )
+                        collision = evaluate_grasp_rectangle_collision_2d(
+                            geometry,
+                            masks.obstacle_mask,
+                            width,
+                            height,
+                            collision_threshold=self.settings.collision_threshold,
+                            outside_threshold=(
+                                self.settings.collision_outside_threshold
+                            ),
+                            valid=masks.valid,
+                            detail=masks.detail,
+                        )
+                    except Exception as error:
+                        collision = unknown_collision(
+                            f"collision mask provider failed: {error}"
+                        )
+                grasp_rectangles[0] = grasp_rectangles[0].model_copy(
+                    update={
+                        "collision_2d_status": collision.status,
+                        "collision_ratio_2d": collision.collision_ratio,
+                        "outside_ratio_2d": collision.outside_ratio,
+                        "clearance_pixels_2d": collision.clearance_pixels,
+                        "collision_detail": collision.detail,
+                    }
+                )
+                generation_stats["collision_check_seconds"] = round(
+                    time.perf_counter() - collision_started, 6
+                )
         else:
             parsed = parse_output(raw_output, width, height)
             boxes = parsed.boxes
             points = parsed.points
 
         annotated = (
-            annotate_image(image, boxes, points, grasps) if annotate else None
+            annotate_image(image, boxes, points, grasps, grasp_rectangles)
+            if annotate
+            else None
         )
         return LocateResponse(
             model=self.settings.model_id,
@@ -279,8 +385,11 @@ class LocateAnythingRuntime:
             boxes=boxes,
             points=points,
             grasps=grasps,
+            grasp_rectangles=grasp_rectangles,
             grasp_status=grasp_status,
             grasp_parse_error=grasp_parse_error,
+            grasp_rect_status=grasp_rect_status,
+            grasp_rect_parse_error=grasp_rect_parse_error,
             generation_stats=generation_stats,
             annotated_image_base64=annotated,
         )

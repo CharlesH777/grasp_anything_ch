@@ -38,7 +38,7 @@ htmlcov/
 !.env.example
 
 # ===== Datasets (large, download separately) =====
-datasets/
+/datasets
 training/data/*.jsonl
 training/data/*_meta.json
 training/data/*_stats.json
@@ -58,7 +58,7 @@ training/evaluation/
 outputs/
 
 # ===== Downloaded models (large, fetch separately) =====
-models/
+/models
 
 # ===== Large binary artifacts =====
 *.safetensors

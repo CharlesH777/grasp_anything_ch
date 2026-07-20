@@ -44,6 +44,11 @@ files, and the two distinct `grasp_task_token_ids`. It does not load the 3B
 weights. `LOCATE_REQUIRE_GRASP_CHECKPOINT=1` also makes the runtime reject a
 base LocateAnything checkpoint that lacks grasp task tokens.
 
+For an independent Grasp Rect checkpoint use
+`LOCATE_REQUIRE_GRASP_RECT_CHECKPOINT=1`. The preflight then requires two
+distinct `grasp_rect_task_token_ids`; do not enable the Contact requirement
+unless the deployed checkpoint is intentionally the separate Contact model.
+
 Install the user service only after `doctor` passes:
 
 ```bash
@@ -119,6 +124,27 @@ CONTACT_PHASE=overfit \
 CONFIG_FILE=training/configs/grasp_anything_realvlg_contact.remote.env \
 bash training/scripts/train_realvlg_contact.sh
 ```
+
+The independent RealVLG Grasp Rect path uses the complete rect patch and its
+own phase sequence:
+
+```bash
+bash training/scripts/bootstrap_eagle.sh --no-clone --task grasp-rect
+MODEL_PATH=/srv/models/LocateAnything-3B \
+META_PATH=/srv/data/grasp/grasp_rect_overfit64_meta.json \
+PHASE0_AUDIT_PATH=/srv/data/grasp/grasp_rect_phase0 \
+REALVLG_OUTPUT_DIR=/srv/outputs/grasp-rect \
+GRASP_RECT_PHASE=overfit \
+CONFIG_FILE=training/configs/grasp_anything_realvlg_grasp.env \
+bash training/scripts/train_realvlg_grasp.sh
+```
+
+Run `training/scripts/audit_realvlg_grasp.py` before starting overfit. The first
+run generates the audit images without accepting them; rerun with
+`--confirm-visual-review` only after inspecting all 200 random and 50 boundary
+images. Overfit requires that accepted Phase 0 directory through
+`PHASE0_AUDIT_PATH`. Cross-phase loading requires the previous accepted Grasp
+Rect checkpoint and always starts a fresh optimizer.
 
 ## Release verification
 

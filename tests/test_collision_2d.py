@@ -1,8 +1,14 @@
 import pytest
 from PIL import Image, ImageDraw
 
-from locate_anything_service.collision_2d import evaluate_collision_2d
+from locate_anything_service.collision_2d import (
+    evaluate_collision_2d,
+    evaluate_grasp_rectangle_collision_2d,
+)
 from locate_anything_service.grasp_geometry import derive_grasp_geometry
+from locate_anything_service.grasp_rect_geometry import (
+    derive_grasp_rectangle_geometry,
+)
 
 
 def _mask(size=(100, 100), box=None):
@@ -76,3 +82,18 @@ def test_collision_rejects_mask_with_wrong_image_size() -> None:
         assert "does not match" in str(error)
     else:
         raise AssertionError("expected mask size error")
+
+
+def test_grasp_rectangle_collision_uses_deterministic_polygon() -> None:
+    geometry = derive_grasp_rectangle_geometry((500, 500, 0, 400), 100, 100)
+    result = evaluate_grasp_rectangle_collision_2d(
+        geometry,
+        _mask(box=(45, 45, 55, 55)),
+        100,
+        100,
+    )
+
+    assert result.status == "collision"
+    assert result.thickness_pixels == 40.0
+    assert result.collision_ratio is not None
+    assert result.collision_ratio > 0

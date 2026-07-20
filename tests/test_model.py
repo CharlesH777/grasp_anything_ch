@@ -53,6 +53,29 @@ class FakeGraspWorker(FakeWorker):
         return "<ref>grasp</ref><grasp><100><500><900><500></grasp>"
 
 
+class FakeGraspRectWorker(FakeWorker):
+    def generate(self, **kwargs):
+        self.generation_mode = kwargs["generation_mode"]
+        assert kwargs["do_sample"] is False
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["top_p"] is None
+        assert kwargs["geometry_type"] == "grasp_rect"
+        assert kwargs["n_future_tokens"] == 6
+        assert kwargs["image_size"] == (100, 100)
+        assert kwargs["grasp_rect_coord_mass_threshold"] > 0
+        assert 0 <= kwargs["grasp_rect_coord_entropy_threshold"] <= 1
+        assert kwargs["grasp_rect_minimum_width_diagonal"] > 0
+        assert kwargs["grasp_rect_gripper_depth_pixels"] == 40
+        assert kwargs["return_generation_stats"] is True
+        return (
+            (
+                "<ref>grasp pose</ref>"
+                "<grasp_rect><500><500><0><400></grasp_rect>"
+            ),
+            {"hybrid_fallback": True, "switch_to_ar_count": 1},
+        )
+
+
 class _RecordingLock:
     def __init__(self) -> None:
         self.enter_count = 0
@@ -66,9 +89,12 @@ class _RecordingLock:
 
 
 class _LoadedWorker:
-    def __init__(self, grasp_task_token_ids=None) -> None:
+    def __init__(
+        self, grasp_task_token_ids=None, grasp_rect_task_token_ids=None
+    ) -> None:
         self.config = types.SimpleNamespace(
-            grasp_task_token_ids=grasp_task_token_ids
+            grasp_task_token_ids=grasp_task_token_ids,
+            grasp_rect_task_token_ids=grasp_rect_task_token_ids,
         )
 
     def to(self, _device):
@@ -79,7 +105,10 @@ class _LoadedWorker:
 
 
 def _fake_transformers(
-    *, fail_model: bool = False, grasp_task_token_ids=None
+    *,
+    fail_model: bool = False,
+    grasp_task_token_ids=None,
+    grasp_rect_task_token_ids=None,
 ) -> types.ModuleType:
     module = types.ModuleType("transformers")
 
@@ -98,7 +127,10 @@ def _fake_transformers(
         def from_pretrained(*_args, **_kwargs):
             if fail_model:
                 raise RuntimeError("model load failed")
-            return _LoadedWorker(grasp_task_token_ids)
+            return _LoadedWorker(
+                grasp_task_token_ids,
+                grasp_rect_task_token_ids,
+            )
 
     module.AutoTokenizer = AutoTokenizer
     module.AutoProcessor = AutoProcessor
@@ -149,6 +181,18 @@ def test_required_grasp_checkpoint_rejects_base_model(monkeypatch) -> None:
     assert runtime.loaded is False
 
 
+def test_required_grasp_rect_checkpoint_rejects_base_model(monkeypatch) -> None:
+    runtime = LocateAnythingRuntime(
+        Settings(device="cpu", require_grasp_rect_checkpoint=True)
+    )
+    monkeypatch.setitem(sys.modules, "transformers", _fake_transformers())
+
+    with pytest.raises(RuntimeError, match="grasp_rect_task_token_ids"):
+        runtime.load()
+
+    assert runtime.loaded is False
+
+
 def test_runtime_uses_setting_default_and_structured_stats(tmp_path: Path) -> None:
     image_path = tmp_path / "image.png"
     Image.new("RGB", (1000, 1000), "white").save(image_path)
@@ -193,5 +237,38 @@ def test_runtime_returns_grasp_and_collision_status(tmp_path: Path) -> None:
     assert len(result.grasps) == 1
     assert result.grasps[0].contacts_pixels == (10, 50, 90, 50)
     assert result.grasps[0].collision_2d_status == "collision"
+    assert result.boxes == []
+    assert result.points == []
+
+
+def test_runtime_returns_grasp_rectangle_and_collision_status(tmp_path: Path) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (100, 100), "white").save(image_path)
+    obstacle = Image.new("L", (100, 100), 0)
+    for x in range(45, 56):
+        for y in range(45, 56):
+            obstacle.putpixel((x, y), 255)
+
+    runtime = LocateAnythingRuntime(
+        Settings(device="cpu", generation_mode="fast"),
+        collision_mask_provider=lambda _image, _query: CollisionMasks(
+            obstacle_mask=obstacle, valid=True
+        ),
+    )
+    runtime._worker = FakeGraspRectWorker()
+    runtime._processor = FakeProcessor()
+    runtime._tokenizer = object()
+
+    result = runtime.predict(image_path, query="object", mode="grasp_rect")
+
+    assert result.grasp_rect_status == "ok"
+    assert len(result.grasp_rectangles) == 1
+    rectangle = result.grasp_rectangles[0]
+    assert rectangle.center_pixels == (50, 50)
+    assert len(rectangle.rectangle_points_pixels) == 8
+    assert rectangle.collision_2d_status == "collision"
+    assert result.generation_stats["hybrid_fallback"] is True
+    assert result.generation_stats["switch_to_ar_count"] == 1
+    assert result.grasps == []
     assert result.boxes == []
     assert result.points == []

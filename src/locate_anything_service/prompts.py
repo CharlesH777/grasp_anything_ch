@@ -13,6 +13,7 @@ PromptMode = Literal[
     "gui_point",
     "point",
     "grasp_contact",
+    "grasp_rect",
 ]
 
 def build_prompt(query: str, mode: PromptMode = "ground_single") -> str:
@@ -50,6 +51,11 @@ def build_prompt(query: str, mode: PromptMode = "ground_single") -> str:
     if mode == "grasp_contact":
         return (
             "Predict one plausible two-finger 2D contact pair for the target "
+            f"described as: {cleaned}."
+        )
+    if mode == "grasp_rect":
+        return (
+            "Predict one stable 2D rectangular grasp pose for the target "
             f"described as: {cleaned}."
         )
     raise ValueError(f"unsupported mode: {mode}")

@@ -20,10 +20,15 @@ class Settings:
     load_model_on_startup: bool = True
     allow_cpu: bool = False
     require_grasp_checkpoint: bool = False
+    require_grasp_rect_checkpoint: bool = False
     generation_mode: str = "hybrid"
     max_new_tokens: int = 2048
     temperature: float = 0.7
     contact_decode_coord_mass_threshold: float = 1e-4
+    grasp_rect_decode_coord_mass_threshold: float = 1e-4
+    grasp_rect_decode_coord_entropy_threshold: float = 1.0
+    grasp_rect_minimum_width_diagonal: float = 1e-4
+    grasp_rect_gripper_depth_pixels: float = 40.0
     collision_thickness_pixels: float = 80.0
     collision_threshold: float = 0.0
     collision_outside_threshold: float = 0.0
@@ -38,6 +43,14 @@ class Settings:
                 "contact_decode_coord_mass_threshold",
                 self.contact_decode_coord_mass_threshold,
             ),
+            (
+                "grasp_rect_decode_coord_mass_threshold",
+                self.grasp_rect_decode_coord_mass_threshold,
+            ),
+            (
+                "grasp_rect_decode_coord_entropy_threshold",
+                self.grasp_rect_decode_coord_entropy_threshold,
+            ),
             ("collision_threshold", self.collision_threshold),
             ("collision_outside_threshold", self.collision_outside_threshold),
         ):
@@ -45,6 +58,10 @@ class Settings:
                 raise ValueError(f"{name} must be in [0, 1]")
         if self.collision_thickness_pixels <= 0:
             raise ValueError("collision_thickness_pixels must be positive")
+        if not 0.0 <= self.grasp_rect_minimum_width_diagonal <= 1.0:
+            raise ValueError("grasp_rect_minimum_width_diagonal must be in [0, 1]")
+        if self.grasp_rect_gripper_depth_pixels <= 0:
+            raise ValueError("grasp_rect_gripper_depth_pixels must be positive")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -64,11 +81,26 @@ class Settings:
             require_grasp_checkpoint=_as_bool(
                 os.getenv("LOCATE_REQUIRE_GRASP_CHECKPOINT"), False
             ),
+            require_grasp_rect_checkpoint=_as_bool(
+                os.getenv("LOCATE_REQUIRE_GRASP_RECT_CHECKPOINT"), False
+            ),
             generation_mode=os.getenv("LOCATE_GENERATION_MODE", "hybrid"),
             max_new_tokens=int(os.getenv("LOCATE_MAX_NEW_TOKENS", "2048")),
             temperature=float(os.getenv("LOCATE_TEMPERATURE", "0.7")),
             contact_decode_coord_mass_threshold=float(
                 os.getenv("LOCATE_CONTACT_COORD_MASS_THRESHOLD", "0.0001")
+            ),
+            grasp_rect_decode_coord_mass_threshold=float(
+                os.getenv("LOCATE_GRASP_RECT_COORD_MASS_THRESHOLD", "0.0001")
+            ),
+            grasp_rect_decode_coord_entropy_threshold=float(
+                os.getenv("LOCATE_GRASP_RECT_COORD_ENTROPY_THRESHOLD", "1.0")
+            ),
+            grasp_rect_minimum_width_diagonal=float(
+                os.getenv("LOCATE_GRASP_RECT_MINIMUM_WIDTH_DIAGONAL", "0.0001")
+            ),
+            grasp_rect_gripper_depth_pixels=float(
+                os.getenv("LOCATE_GRASP_RECT_GRIPPER_DEPTH_PIXELS", "40")
             ),
             collision_thickness_pixels=float(
                 os.getenv("LOCATE_COLLISION_THICKNESS_PIXELS", "80")

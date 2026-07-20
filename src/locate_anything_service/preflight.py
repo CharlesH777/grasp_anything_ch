@@ -39,7 +39,9 @@ def _load_local_config(model_path: Path) -> tuple[dict[str, Any] | None, str]:
     return payload, str(config_path)
 
 
-def _check_local_model(model_path: Path, require_grasp: bool) -> list[CheckResult]:
+def _check_local_model(
+    model_path: Path, require_grasp: bool, require_grasp_rect: bool
+) -> list[CheckResult]:
     model_path = model_path.expanduser().resolve()
     if not model_path.is_dir():
         return [_result("model_path", False, f"directory not found: {model_path}")]
@@ -87,6 +89,29 @@ def _check_local_model(model_path: Path, require_grasp: bool) -> list[CheckResul
                 else "config.json needs two distinct integer grasp_task_token_ids",
             )
         )
+    if require_grasp_rect:
+        token_ids = config.get("grasp_rect_task_token_ids")
+        valid = (
+            isinstance(token_ids, list)
+            and len(token_ids) == 2
+            and all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in token_ids
+            )
+            and token_ids[0] != token_ids[1]
+        )
+        results.append(
+            _result(
+                "grasp_rect_checkpoint",
+                valid,
+                "grasp rect task token IDs are present and distinct"
+                if valid
+                else (
+                    "config.json needs two distinct integer "
+                    "grasp_rect_task_token_ids"
+                ),
+            )
+        )
     return results
 
 
@@ -94,12 +119,18 @@ def run_preflight(
     settings: Settings,
     *,
     require_grasp: bool | None = None,
+    require_grasp_rect: bool | None = None,
     check_cuda: bool = True,
 ) -> list[CheckResult]:
     require_grasp = (
         settings.require_grasp_checkpoint
         if require_grasp is None
         else require_grasp
+    )
+    require_grasp_rect = (
+        settings.require_grasp_rect_checkpoint
+        if require_grasp_rect is None
+        else require_grasp_rect
     )
     version = sys.version_info
     results = [
@@ -134,17 +165,21 @@ def run_preflight(
 
     if _is_local_reference(settings.model_id):
         results.extend(
-            _check_local_model(Path(settings.model_id), require_grasp=require_grasp)
+            _check_local_model(
+                Path(settings.model_id),
+                require_grasp=require_grasp,
+                require_grasp_rect=require_grasp_rect,
+            )
         )
     else:
         results.append(
             _result(
                 "model_reference",
-                not require_grasp,
+                not require_grasp and not require_grasp_rect,
                 f"remote model ID: {settings.model_id}"
-                if not require_grasp
+                if not require_grasp and not require_grasp_rect
                 else (
-                    "grasp checkpoint validation requires a local checkpoint path; "
+                    "structured grasp checkpoint validation requires a local path; "
                     f"got remote ID {settings.model_id!r}"
                 ),
             )

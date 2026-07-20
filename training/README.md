@@ -2,7 +2,9 @@
 
 > 本文档记录旧 VOC 单卡实验，不是当前 grasp-contact 训练入口。当前环境使用
 > `bash scripts/bootstrap.sh --training`，固定 Eagle revision 和完整 contact patch；
-> 参见仓库根目录的 `DEPLOYMENT.md` 与 `GRASP_CONTACT_README.md`。
+> 参见仓库根目录的 `DEPLOYMENT.md`、`GRASP_CONTACT_README.md` 与
+> `GRASP_RECT_README.md`。RealVLG Grasp Rect 使用
+> `training/scripts/train_realvlg_grasp.sh`，不要使用本页的旧 VOC 入口。
 
 此目录针对当前 RTX 3090 Ti 24GB 主机准备。脚本默认只打印命令，不会自动启动训练。
 
