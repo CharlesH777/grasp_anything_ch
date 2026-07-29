@@ -5,17 +5,24 @@ import argparse
 import json
 import math
 import re
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from locate_anything_service.grasp_geometry import (
+from PIL import Image
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from locate_anything_service.grasp_geometry import (  # noqa: E402
     polygon_area,
     polygon_inside_image_area,
     polygon_iou,
 )
-from locate_anything_service.grasp_rect_geometry import (
+from locate_anything_service.grasp_rect_geometry import (  # noqa: E402
     DEFAULT_GRIPPER_DEPTH_PIXELS,
     DEFAULT_MINIMUM_WIDTH_DIAGONAL,
     canonical_angle_degrees,
@@ -24,7 +31,7 @@ from locate_anything_service.grasp_rect_geometry import (
     points8_to_rect,
     rect_to_points8,
 )
-from locate_anything_service.parser import parse_grasp_rect_output
+from locate_anything_service.parser import parse_grasp_rect_output  # noqa: E402
 
 _REALVLG_RECT_PATTERN = re.compile(
     r"\(\s*(-?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*,\s*"
@@ -48,9 +55,25 @@ def parse_args() -> argparse.Namespace:
         description="Strict offline evaluation for RealVLG rectangular grasps."
     )
     parser.add_argument("--annotations", type=Path, nargs="+", required=True)
-    parser.add_argument("--predictions", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--predictions", type=Path)
+    source.add_argument("--model-path", type=Path)
+    parser.add_argument("--data-root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--metrics", type=Path)
+    parser.add_argument(
+        "--generation-mode",
+        choices=("fast", "slow", "hybrid"),
+        default="fast",
+    )
+    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument(
+        "--grasp-rect-coord-mass-threshold", type=float, default=1e-4
+    )
+    parser.add_argument(
+        "--grasp-rect-coord-entropy-threshold", type=float, default=1.0
+    )
+    parser.add_argument("--grasp-rect-keep-k", type=int, default=4)
     parser.add_argument(
         "--prediction-format",
         choices=("locateanything", "realvlg"),
@@ -69,6 +92,124 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _decode_generation_output(output: Any, input_ids: Any, processor: Any) -> str:
+    if isinstance(output, tuple):
+        output = output[0]
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list) and output and isinstance(output[0], str):
+        return output[0]
+    try:
+        import torch
+    except ImportError:
+        return str(output)
+    if torch.is_tensor(output):
+        generated = output[:, input_ids.shape[1] :].detach().cpu()
+        decoded = processor.tokenizer.batch_decode(
+            generated,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+        return decoded[0]
+    return str(output)
+
+
+class ModelPredictor:
+    def __init__(
+        self,
+        model_path: Path,
+        generation_mode: str,
+        max_new_tokens: int,
+        coord_mass_threshold: float,
+        coord_entropy_threshold: float,
+        keep_k: int,
+        minimum_width_diagonal: float,
+        gripper_depth_pixels: float,
+    ) -> None:
+        import torch
+        from transformers import AutoModel, AutoProcessor
+
+        self.torch = torch
+        self.generation_mode = generation_mode
+        self.max_new_tokens = max_new_tokens
+        self.coord_mass_threshold = coord_mass_threshold
+        self.coord_entropy_threshold = coord_entropy_threshold
+        self.keep_k = keep_k
+        self.minimum_width_diagonal = minimum_width_diagonal
+        self.gripper_depth_pixels = gripper_depth_pixels
+        self.model = (
+            AutoModel.from_pretrained(
+                str(model_path),
+                trust_remote_code=True,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+            )
+            .to("cuda")
+            .eval()
+        )
+        self.processor = AutoProcessor.from_pretrained(
+            str(model_path), trust_remote_code=True, use_fast=True
+        )
+
+    def __call__(
+        self, image_path: Path, description: str
+    ) -> tuple[str, float, dict[str, Any]]:
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
+        prompt = (
+            "Predict one stable 2D rectangular grasp pose for the target "
+            f"described as: {description}"
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        text = self.processor.py_apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        images, videos = self.processor.process_vision_info(messages)
+        inputs = self.processor(
+            text=[text], images=images, videos=videos, return_tensors="pt"
+        ).to("cuda")
+        kwargs: dict[str, Any] = {
+            "pixel_values": inputs["pixel_values"].to(
+                "cuda", dtype=self.torch.bfloat16
+            ),
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs.get("attention_mask"),
+            "image_grid_hws": inputs.get("image_grid_hws"),
+            "tokenizer": self.processor.tokenizer,
+            "max_new_tokens": self.max_new_tokens,
+            "use_cache": True,
+            "do_sample": False,
+            "generation_mode": self.generation_mode,
+            "geometry_type": "grasp_rect",
+            "image_size": image.size,
+            "grasp_rect_minimum_width_diagonal": self.minimum_width_diagonal,
+            "grasp_rect_gripper_depth_pixels": self.gripper_depth_pixels,
+            "grasp_rect_coord_mass_threshold": self.coord_mass_threshold,
+            "grasp_rect_coord_entropy_threshold": self.coord_entropy_threshold,
+            "grasp_rect_keep_k": self.keep_k,
+        }
+        if self.generation_mode in {"fast", "hybrid"}:
+            kwargs["n_future_tokens"] = 6
+        started = time.perf_counter()
+        with self.torch.inference_mode():
+            output = self.model.generate(**kwargs)
+        latency = time.perf_counter() - started
+        stats = output[1] if isinstance(output, tuple) and len(output) > 1 else {}
+        return (
+            _decode_generation_output(output, inputs["input_ids"], self.processor),
+            latency,
+            stats if isinstance(stats, dict) else {},
+        )
+
+
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.expanduser().open("r", encoding="utf-8") as handle:
@@ -80,6 +221,13 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number} must contain a JSON object")
             rows.append(row)
     return rows
+
+
+def _resolve(root: Path, value: str | None) -> Path | None:
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    return path.resolve() if path.is_absolute() else (root / path).resolve()
 
 
 def _prediction_map(path: Path) -> dict[str, dict[str, Any]]:
@@ -241,7 +389,30 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         for path in args.annotations
         for row in _load_jsonl(path.expanduser().resolve())
     ]
-    predictions = _prediction_map(args.predictions.expanduser().resolve())
+    prediction_path = getattr(args, "predictions", None)
+    model_path = getattr(args, "model_path", None)
+    predictions = (
+        _prediction_map(prediction_path.expanduser().resolve())
+        if prediction_path is not None
+        else {}
+    )
+    predictor = None
+    data_root = None
+    if model_path is not None:
+        raw_data_root = getattr(args, "data_root", None)
+        if raw_data_root is None:
+            raise ValueError("--data-root is required with --model-path")
+        data_root = raw_data_root.expanduser().resolve()
+        predictor = ModelPredictor(
+            model_path.expanduser().resolve(),
+            getattr(args, "generation_mode", "fast"),
+            getattr(args, "max_new_tokens", 128),
+            getattr(args, "grasp_rect_coord_mass_threshold", 1e-4),
+            getattr(args, "grasp_rect_coord_entropy_threshold", 1.0),
+            getattr(args, "grasp_rect_keep_k", 4),
+            args.minimum_width_diagonal,
+            args.gripper_depth_pixels,
+        )
     output_path = args.output.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -288,11 +459,28 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             sample_id = str(annotation.get("sample_id", ""))
             width = int(annotation["image_width"])
             height = int(annotation["image_height"])
-            prediction_row = predictions.get(sample_id, {})
-            generation_stats = prediction_row.get("generation_stats") or {}
-            latency = generation_stats.get(
-                "generation_seconds", prediction_row.get("generation_seconds")
-            )
+            if predictor is not None:
+                assert data_root is not None
+                image_path = _resolve(data_root, annotation.get("image"))
+                if image_path is None:
+                    raise ValueError(f"sample {sample_id} has no image")
+                raw_output, latency, generation_stats = predictor(
+                    image_path, str(annotation.get("description", ""))
+                )
+                generation_stats = {
+                    "generation_seconds": latency,
+                    "hybrid_fallback": bool(
+                        generation_stats.get("hybrid_fallback", False)
+                    ),
+                }
+                prediction_row: dict[str, Any] = {}
+            else:
+                prediction_row = predictions.get(sample_id, {})
+                generation_stats = prediction_row.get("generation_stats") or {}
+                latency = generation_stats.get(
+                    "generation_seconds", prediction_row.get("generation_seconds")
+                )
+                raw_output = str(prediction_row.get("raw_output", ""))
             if isinstance(latency, int | float) and math.isfinite(float(latency)):
                 generation_latencies.append(float(latency))
             fallback_count += int(
@@ -301,7 +489,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                     or prediction_row.get("hybrid_fallback")
                 )
             )
-            raw_output = str(prediction_row.get("raw_output", ""))
             gt_candidates = (
                 annotation.get("evaluation_grasp_rectangles_pixels")
                 or annotation.get("grasp_rectangles_pixels")
@@ -366,6 +553,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "raw_output": raw_output,
                 "status": decoded.status,
                 "parse_error": decoded.error,
+                "generation_stats": generation_stats,
                 "iou": 0.0,
                 "gacc_corrected": 0,
                 "gacc_official_buggy": 0,

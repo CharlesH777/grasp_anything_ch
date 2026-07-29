@@ -482,6 +482,7 @@ grasp_anything/
 ├── tests/                         # CPU 回归测试
 ├── DEPLOYMENT.md                  # 跨机器安装、模型挂载与发布检查
 ├── GRASP_CONTACT_README.md        # 完整设计、收敛和风险文档
+├── JOINT_TRAINING_README.md       # Contact/Grasp Rect/BBox 联合训练
 ├── Dockerfile
 ├── compose.yaml
 └── pyproject.toml
@@ -498,4 +499,4 @@ for script in scripts/bootstrap.sh training/scripts/*.sh; do bash -n "$script"; 
 bash training/scripts/bootstrap_eagle.sh --no-clone
 ```
 
-详细损失、DDP reduction、碰撞协议、风险和消融计划见 [`GRASP_CONTACT_README.md`](GRASP_CONTACT_README.md)。`training/README.md` 和 `report/` 中的 VOC 数据与旧超参数属于历史实验，不是当前抓取训练主线。
+详细损失、DDP reduction、碰撞协议、风险和消融计划见 [`GRASP_CONTACT_README.md`](GRASP_CONTACT_README.md)。联合训练入口和阶段门禁见 [`JOINT_TRAINING_README.md`](JOINT_TRAINING_README.md)。`training/README.md` 和 `report/` 中的 VOC 数据与旧超参数属于历史实验，不是当前抓取训练主线。

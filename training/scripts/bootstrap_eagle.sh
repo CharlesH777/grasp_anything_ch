@@ -26,7 +26,7 @@ while (( $# > 0 )); do
     -h|--help)
       cat <<'EOF'
 Usage: bootstrap_eagle.sh [--eagle-root PATH] [--no-clone]
-                          [--task contact|grasp-rect]
+                          [--task contact|grasp-rect|joint]
 
 Clone the pinned NVIDIA Eagle revision when needed and apply the tracked
 task patch. Existing unrelated Eagle modifications are rejected.
@@ -45,9 +45,9 @@ case "${task}" in
     patch_file="${training_dir}/patches/locateanything-grasp-contact.patch"
     patch_label="grasp-contact"
     ;;
-  grasp-rect)
+  grasp-rect|joint)
     patch_file="${training_dir}/patches/locateanything-grasp-rect.patch"
-    patch_label="grasp-rect"
+    patch_label="${task}"
     ;;
   *)
     echo "Unsupported Eagle task patch: ${task}" >&2

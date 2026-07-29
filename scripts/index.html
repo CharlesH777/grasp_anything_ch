@@ -151,6 +151,8 @@ tr.hl{background:rgba(255,255,255,.06)!important}
     <div class="form-group">
       <label>任务模式</label>
       <select id="modeSelect">
+        <option value="grasp_contact">抓取接触点 — grasp_contact</option>
+        <option value="grasp_rect">矩形抓取姿态 — grasp_rect</option>
         <option value="ground_single">单目标定位 — ground_single</option>
         <option value="ground_multi">多目标定位 — ground_multi</option>
         <option value="detect">类别检测 — detect</option>
@@ -188,6 +190,8 @@ tr.hl{background:rgba(255,255,255,.06)!important}
 <script>
 /* ====== 配置数据 ====== */
 const MODES={
+  grasp_contact:{label:"抓取接触点",desc:"预测两指 2D 接触点对（微调能力）",ph:"bottle",req:true},
+  grasp_rect:{label:"矩形抓取姿态",desc:"预测 2D 矩形抓取姿态（微调能力）",ph:"bottle",req:true},
   ground_single:{label:"单目标定位",desc:"用自然语言定位单个目标实例",ph:"the leftmost red cup",req:true},
   ground_multi:{label:"多目标定位",desc:"用自然语言定位所有匹配的实例",ph:"all workers wearing helmets",req:true},
   detect:{label:"类别检测",desc:"检测指定类别的所有实例，多类别用逗号分隔",ph:"person, car, bicycle",req:true},
@@ -441,6 +445,54 @@ function renderCanvas(){
       ctx.fillStyle="#000";ctx.fillText(p.label,px+17,py+4);
     }
   });
+  /* 抓取接触点：两指端点 + 连线 + 中心 */
+  const offP=d.boxes.length+d.points.length;
+  d.grasps.forEach((g,i)=>{
+    const c=color(offP+i);const[x1,y1,x2,y2]=g.contacts_pixels;
+    const px1=x1*scale,py1=y1*scale,px2=x2*scale,py2=y2*scale;
+    const isHl=hlType==="grasp"&&hlIdx===i;
+    const r=isHl?8:5;
+    /* 连接线段（夹爪开口）*/
+    ctx.strokeStyle=c;ctx.lineWidth=isHl?4:2.5;
+    ctx.beginPath();ctx.moveTo(px1,py1);ctx.lineTo(px2,py2);ctx.stroke();
+    /* 两个接触端点 */
+    ctx.fillStyle=c;
+    ctx.beginPath();ctx.arc(px1,py1,r,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(px2,py2,r,0,Math.PI*2);ctx.fill();
+    /* 中心点（空心圆）*/
+    const cx=(px1+px2)/2,cy=(py1+py2)/2;
+    ctx.strokeStyle=c;ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.arc(cx,cy,r+4,0,Math.PI*2);ctx.stroke();
+  });
+  /* 矩形抓取姿态：旋转矩形 + 中心 + 朝向线 */
+  const offR=d.boxes.length+d.points.length+d.grasps.length;
+  d.grasp_rectangles.forEach((gr,i)=>{
+    const c=color(offR+i);
+    const pts=gr.rectangle_points_pixels;
+    const isHl=hlType==="grasp_rect"&&hlIdx===i;
+    /* 旋转矩形（4 角点）*/
+    ctx.strokeStyle=c;ctx.lineWidth=isHl?4:2.5;
+    ctx.beginPath();
+    for(let j=0;j<4;j++){
+      const px=pts[j*2]*scale,py=pts[j*2+1]*scale;
+      if(j===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+    }
+    ctx.closePath();ctx.stroke();
+    /* 半透明填充 */
+    ctx.fillStyle=c+"22";ctx.fill();
+    /* 中心点 */
+    const[ccx,ccy]=gr.center_pixels;
+    ctx.fillStyle=c;
+    ctx.beginPath();ctx.arc(ccx*scale,ccy*scale,4,0,Math.PI*2);ctx.fill();
+    /* 朝向线（从中心沿角度方向）*/
+    const ang=gr.angle_radians_image;
+    const len=gr.opening_width_pixels*scale*0.6;
+    ctx.strokeStyle=c;ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(ccx*scale,ccy*scale);
+    ctx.lineTo(ccx*scale+Math.cos(ang)*len,ccy*scale+Math.sin(ang)*len);
+    ctx.stroke();
+  });
 }
 let resizeT;
 window.addEventListener("resize",()=>{clearTimeout(resizeT);resizeT=setTimeout(renderCanvas,200)});
@@ -465,13 +517,16 @@ function renderResults(data,modelName){
   let h="";
 
   /* Canvas 标注图 */
+  const totalAnno=data.boxes.length+data.points.length+data.grasps.length+data.grasp_rectangles.length;
   h+='<div class="result-section">';
-  h+='<h3>标注图像 <span class="badge">'+(data.boxes.length+data.points.length)+' 个结果</span></h3>';
+  h+='<h3>标注图像 <span class="badge">'+totalAnno+' 个结果</span></h3>';
   h+='<div class="canvas-wrap"><canvas id="resultCanvas"></canvas></div>';
   h+='<div class="canvas-caption">';
   h+='<span class="tag">'+data.image_width+'×'+data.image_height+'</span>';
   h+='<span class="tag">框 '+data.boxes.length+'</span>';
   h+='<span class="tag">点 '+data.points.length+'</span>';
+  h+='<span class="tag">接触点对 '+data.grasps.length+'</span>';
+  h+='<span class="tag">抓取矩形 '+data.grasp_rectangles.length+'</span>';
   if(modelName)h+='<span class="tag model-tag">'+esc(modelName)+'</span>';
   h+='<span>悬停表格行可高亮对应标注</span>';
   h+='</div></div>';
@@ -521,14 +576,85 @@ function renderResults(data,modelName){
   }else{h+='<p class="empty-hint">无检测点</p>'}
   h+='</div>';
 
+  /* 抓取接触点 */
+  if(data.mode==="grasp_contact"||data.grasps.length||data.grasp_status){
+    const offP=data.boxes.length+data.points.length;
+    h+=`<div class="result-section"><h3>抓取接触点 <span class="badge">${data.grasps.length}</span></h3>`;
+    if(data.grasp_status&&data.grasp_status!=="ok"){
+      h+=`<p class="empty-hint">解析状态: ${esc(data.grasp_status)}${data.grasp_parse_error?' — '+esc(data.grasp_parse_error):''}</p>`;
+    }
+    if(data.grasps.length){
+      h+='<div class="table-wrap"><table><thead><tr><th>#</th><th>标签</th><th class="mono">接触点 [0,1000]</th><th class="mono">像素</th><th class="mono">角度°</th><th class="mono">开口宽度(px)</th><th>碰撞</th></tr></thead><tbody>';
+      data.grasps.forEach((g,i)=>{
+        const c=color(offP+i);
+        const[x1,y1,x2,y2]=g.contacts_1000;
+        const[px1,py1,px2,py2]=g.contacts_pixels;
+        const ang=(g.angle_radians_image*180/Math.PI).toFixed(1);
+        const col=g.collision_2d_status==="free"?"var(--green)":g.collision_2d_status==="collision"?"var(--red)":"var(--text2)";
+        h+=`<tr data-type="grasp" data-idx="${i}" style="border-left:3px solid ${c}">`;
+        h+=`<td><span style="color:${c}">●</span> ${i+1}</td>`;
+        h+=`<td>${g.label?esc(g.label):'<span class="empty-hint">—</span>'}</td>`;
+        h+=`<td class="mono">[${x1}, ${y1}, ${x2}, ${y2}]</td>`;
+        h+=`<td class="mono">(${px1}, ${py1}) → (${px2}, ${py2})</td>`;
+        h+=`<td class="mono">${ang}</td>`;
+        h+=`<td class="mono">${g.opening_width_pixels.toFixed(1)}</td>`;
+        h+=`<td style="color:${col}">${esc(g.collision_2d_status)}</td>`;
+        h+='</tr>';
+      });
+      h+='</tbody></table></div>';
+    }else if(data.grasp_status==="ok"){
+      h+='<p class="empty-hint">无抓取结果</p>';
+    }
+    h+='</div>';
+  }
+
+  /* 抓取矩形 */
+  if(data.mode==="grasp_rect"||data.grasp_rectangles.length||data.grasp_rect_status){
+    const offR=data.boxes.length+data.points.length+data.grasps.length;
+    h+=`<div class="result-section"><h3>抓取矩形 <span class="badge">${data.grasp_rectangles.length}</span></h3>`;
+    if(data.grasp_rect_status&&data.grasp_rect_status!=="ok"){
+      h+=`<p class="empty-hint">解析状态: ${esc(data.grasp_rect_status)}${data.grasp_rect_parse_error?' — '+esc(data.grasp_rect_parse_error):''}</p>`;
+    }
+    if(data.grasp_rectangles.length){
+      h+='<div class="table-wrap"><table><thead><tr><th>#</th><th>标签</th><th class="mono">参数 [cx,cy,θ,w]</th><th class="mono">中心(px)</th><th class="mono">角度°</th><th class="mono">开口宽度(px)</th><th>碰撞</th></tr></thead><tbody>';
+      data.grasp_rectangles.forEach((gr,i)=>{
+        const c=color(offR+i);
+        const[cx,cy,th,w]=gr.parameters_1000;
+        const[pcx,pcy]=gr.center_pixels;
+        const ang=gr.angle_degrees_image.toFixed(1);
+        const col=gr.collision_2d_status==="free"?"var(--green)":gr.collision_2d_status==="collision"?"var(--red)":"var(--text2)";
+        h+=`<tr data-type="grasp_rect" data-idx="${i}" style="border-left:3px solid ${c}">`;
+        h+=`<td><span style="color:${c}">●</span> ${i+1}</td>`;
+        h+=`<td>${gr.label?esc(gr.label):'<span class="empty-hint">—</span>'}</td>`;
+        h+=`<td class="mono">[${cx}, ${cy}, ${th}, ${w}]</td>`;
+        h+=`<td class="mono">(${pcx}, ${pcy})</td>`;
+        h+=`<td class="mono">${ang}</td>`;
+        h+=`<td class="mono">${gr.opening_width_pixels.toFixed(1)}</td>`;
+        h+=`<td style="color:${col}">${esc(gr.collision_2d_status)}</td>`;
+        h+='</tr>';
+      });
+      h+='</tbody></table></div>';
+    }else if(data.grasp_rect_status==="ok"){
+      h+='<p class="empty-hint">无抓取矩形</p>';
+    }
+    h+='</div>';
+  }
+
   /* 统计 */
   if(data.generation_stats){
     const secs=parseFloat(data.generation_stats.generation_seconds||0);
     h+='<div class="result-section"><h3>推理统计</h3><div class="stats-grid">';
     h+=`<div class="stat-card"><div class="k">耗时</div><div class="v">${secs.toFixed(3)} s</div></div>`;
     h+=`<div class="stat-card"><div class="k">box 数量</div><div class="v">${data.generation_stats.box_count||0}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">grasp 数量</div><div class="v">${data.generation_stats.grasp_count||0}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">grasp_rect 数量</div><div class="v">${data.generation_stats.grasp_rect_count||0}</div></div>`;
     h+=`<div class="stat-card"><div class="k">检测框</div><div class="v">${data.boxes.length}</div></div>`;
     h+=`<div class="stat-card"><div class="k">检测点</div><div class="v">${data.points.length}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">抓取接触点</div><div class="v">${data.grasps.length}</div></div>`;
+    h+=`<div class="stat-card"><div class="k">抓取矩形</div><div class="v">${data.grasp_rectangles.length}</div></div>`;
+    if(data.generation_stats.collision_check_seconds){
+      h+=`<div class="stat-card"><div class="k">碰撞检测</div><div class="v">${parseFloat(data.generation_stats.collision_check_seconds).toFixed(3)} s</div></div>`;
+    }
     h+='</div></div>';
   }
 

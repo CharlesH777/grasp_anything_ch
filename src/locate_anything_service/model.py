@@ -155,6 +155,13 @@ class LocateAnythingRuntime:
         with Image.open(image_path) as source:
             image = source.convert("RGB")
         width, height = image.size
+        max_pixels = self.settings.max_image_pixels
+        if width * height > max_pixels:
+            scale = (max_pixels / (width * height)) ** 0.5
+            new_w = max(1, int(width * scale))
+            new_h = max(1, int(height * scale))
+            image = image.resize((new_w, new_h), Image.Resampling.BICUBIC)
+            width, height = image.size
 
         messages = [
             {

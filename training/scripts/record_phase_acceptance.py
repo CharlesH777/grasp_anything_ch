@@ -50,6 +50,7 @@ def build_acceptance(
     task: str = "contact",
     min_coordinate_top1_accuracy: float = 0.95,
     min_overfit_miou_ratio: float = 0.95,
+    state_filename: str | None = None,
 ) -> dict[str, Any]:
     trainer_state = _load_json(checkpoint / "trainer_state.json")
     global_step = trainer_state.get("global_step")
@@ -60,11 +61,12 @@ def build_acceptance(
     ):
         raise ValueError("checkpoint trainer_state.json needs a positive global_step")
 
-    state_filename = (
-        "grasp_rect_trainer_state.json"
-        if task == "grasp_rect"
-        else "grasp_contact_trainer_state.json"
-    )
+    if state_filename is None:
+        state_filename = (
+            "grasp_rect_trainer_state.json"
+            if task == "grasp_rect"
+            else "grasp_contact_trainer_state.json"
+        )
     task_state = _load_json(checkpoint / state_filename)
     if task_state.get("training_phase") != phase:
         raise ValueError(
@@ -229,6 +231,95 @@ def build_acceptance(
     }
 
 
+def build_joint_acceptance(
+    checkpoint: Path,
+    phase: str,
+    contact_metric_paths: dict[str, Path],
+    grasp_rect_metric_paths: dict[str, Path],
+    grounding_metrics_path: Path,
+    *,
+    min_format_valid_rate: float,
+    min_positive_output_rate: float,
+    min_gacc_strict: float,
+    min_coordinate_top1_accuracy: float = 0.95,
+    min_overfit_miou_ratio: float = 0.95,
+    min_grounding_retention: float = 0.98,
+) -> dict[str, Any]:
+    common = {
+        "min_format_valid_rate": min_format_valid_rate,
+        "min_positive_output_rate": min_positive_output_rate,
+        "min_gacc_strict": min_gacc_strict,
+        "min_coordinate_top1_accuracy": min_coordinate_top1_accuracy,
+        "min_overfit_miou_ratio": min_overfit_miou_ratio,
+        "state_filename": "joint_trainer_state.json",
+    }
+    contact = build_acceptance(
+        checkpoint,
+        phase,
+        contact_metric_paths,
+        task="contact",
+        **common,
+    )
+    grasp_rect = build_acceptance(
+        checkpoint,
+        phase,
+        grasp_rect_metric_paths,
+        task="grasp_rect",
+        **common,
+    )
+    grounding = _load_json(grounding_metrics_path)
+    retention = grounding.get("retention_ratio")
+    if retention is None:
+        baseline = grounding.get("baseline_score")
+        score = grounding.get("score")
+        if (
+            isinstance(baseline, bool)
+            or not isinstance(baseline, int | float)
+            or baseline <= 0.0
+            or isinstance(score, bool)
+            or not isinstance(score, int | float)
+        ):
+            raise ValueError(
+                "grounding metrics need retention_ratio or positive "
+                "baseline_score plus score"
+            )
+        retention = float(score) / float(baseline)
+    if (
+        isinstance(retention, bool)
+        or not isinstance(retention, int | float)
+        or not math.isfinite(float(retention))
+        or float(retention) < 0.0
+    ):
+        raise ValueError("grounding retention_ratio must be finite and non-negative")
+    retention = float(retention)
+
+    failures = [f"contact:{item}" for item in contact["failures"]]
+    failures.extend(
+        f"grasp_rect:{item}" for item in grasp_rect["failures"]
+    )
+    if retention < min_grounding_retention:
+        failures.append("grounding:retention_ratio")
+    return {
+        "phase": phase,
+        "task": "joint",
+        "accepted": not failures,
+        "checkpoint_step": contact["checkpoint_step"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "thresholds": {
+            "contact": contact["thresholds"],
+            "grasp_rect": grasp_rect["thresholds"],
+            "grounding_retention_ratio": min_grounding_retention,
+        },
+        "metrics": {
+            "contact": contact["metrics"],
+            "grasp_rect": grasp_rect["metrics"],
+            "grounding_retention_ratio": retention,
+            "grounding": grounding,
+        },
+        "failures": failures,
+    }
+
+
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -256,19 +347,25 @@ def parse_args() -> argparse.Namespace:
             "multigt",
             "negative",
             "collision",
+            "structured_r0",
+            "structured",
         ),
         required=True,
     )
     parser.add_argument(
-        "--task", choices=("contact", "grasp_rect"), default="contact"
+        "--task", choices=("contact", "grasp_rect", "joint"), default="contact"
     )
     parser.add_argument(
         "--metrics",
         action="append",
-        required=True,
         metavar="SPLIT=PATH",
         help="Evaluator metrics JSON; may be repeated for multiple splits.",
     )
+    parser.add_argument("--contact-metrics", action="append", metavar="SPLIT=PATH")
+    parser.add_argument(
+        "--grasp-rect-metrics", action="append", metavar="SPLIT=PATH"
+    )
+    parser.add_argument("--grounding-metrics", type=Path)
     parser.add_argument("--min-format-valid-rate", type=float, default=0.98)
     parser.add_argument("--min-positive-output-rate", type=float, default=0.98)
     parser.add_argument("--min-gacc-strict", type=float, default=0.30)
@@ -276,20 +373,43 @@ def parse_args() -> argparse.Namespace:
         "--min-coordinate-top1-accuracy", type=float, default=0.95
     )
     parser.add_argument("--min-overfit-miou-ratio", type=float, default=0.95)
+    parser.add_argument("--min-grounding-retention", type=float, default=0.98)
     parser.add_argument("--report", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    metric_paths: dict[str, Path] = {}
-    for item in args.metrics:
-        if "=" not in item:
-            raise SystemExit(f"invalid --metrics value: {item!r}")
-        split, raw_path = item.split("=", 1)
-        if not split or split in metric_paths:
-            raise SystemExit(f"invalid or duplicate metrics split: {split!r}")
-        metric_paths[split] = Path(raw_path).expanduser().resolve()
+    def parse_metric_paths(items: list[str] | None, option: str) -> dict[str, Path]:
+        metric_paths: dict[str, Path] = {}
+        for item in items or []:
+            if "=" not in item:
+                raise SystemExit(f"invalid {option} value: {item!r}")
+            split, raw_path = item.split("=", 1)
+            if not split or split in metric_paths:
+                raise SystemExit(
+                    f"invalid or duplicate {option} split: {split!r}"
+                )
+            metric_paths[split] = Path(raw_path).expanduser().resolve()
+        return metric_paths
+
+    metric_paths = parse_metric_paths(args.metrics, "--metrics")
+    contact_metric_paths = parse_metric_paths(
+        args.contact_metrics, "--contact-metrics"
+    )
+    grasp_rect_metric_paths = parse_metric_paths(
+        args.grasp_rect_metrics, "--grasp-rect-metrics"
+    )
+    if args.task == "joint":
+        if not contact_metric_paths or not grasp_rect_metric_paths:
+            raise SystemExit(
+                "joint acceptance requires --contact-metrics and "
+                "--grasp-rect-metrics"
+            )
+        if args.grounding_metrics is None:
+            raise SystemExit("joint acceptance requires --grounding-metrics")
+    elif not metric_paths:
+        raise SystemExit("--metrics is required for single-task acceptance")
 
     for name, value in (
         ("min_format_valid_rate", args.min_format_valid_rate),
@@ -297,24 +417,42 @@ def main() -> int:
         ("min_gacc_strict", args.min_gacc_strict),
         ("min_coordinate_top1_accuracy", args.min_coordinate_top1_accuracy),
         ("min_overfit_miou_ratio", args.min_overfit_miou_ratio),
+        ("min_grounding_retention", args.min_grounding_retention),
     ):
         if not 0.0 <= value <= 1.0:
             raise SystemExit(f"{name} must be in [0, 1]")
 
     try:
-        payload = build_acceptance(
-            args.checkpoint.expanduser().resolve(),
-            args.phase,
-            metric_paths,
-            min_format_valid_rate=args.min_format_valid_rate,
-            min_positive_output_rate=args.min_positive_output_rate,
-            min_gacc_strict=args.min_gacc_strict,
-            task=args.task,
-            min_coordinate_top1_accuracy=(
-                args.min_coordinate_top1_accuracy
-            ),
-            min_overfit_miou_ratio=args.min_overfit_miou_ratio,
-        )
+        if args.task == "joint":
+            payload = build_joint_acceptance(
+                args.checkpoint.expanduser().resolve(),
+                args.phase,
+                contact_metric_paths,
+                grasp_rect_metric_paths,
+                args.grounding_metrics.expanduser().resolve(),
+                min_format_valid_rate=args.min_format_valid_rate,
+                min_positive_output_rate=args.min_positive_output_rate,
+                min_gacc_strict=args.min_gacc_strict,
+                min_coordinate_top1_accuracy=(
+                    args.min_coordinate_top1_accuracy
+                ),
+                min_overfit_miou_ratio=args.min_overfit_miou_ratio,
+                min_grounding_retention=args.min_grounding_retention,
+            )
+        else:
+            payload = build_acceptance(
+                args.checkpoint.expanduser().resolve(),
+                args.phase,
+                metric_paths,
+                min_format_valid_rate=args.min_format_valid_rate,
+                min_positive_output_rate=args.min_positive_output_rate,
+                min_gacc_strict=args.min_gacc_strict,
+                task=args.task,
+                min_coordinate_top1_accuracy=(
+                    args.min_coordinate_top1_accuracy
+                ),
+                min_overfit_miou_ratio=args.min_overfit_miou_ratio,
+            )
     except ValueError as error:
         print(f"Phase acceptance failed: {error}")
         return 1

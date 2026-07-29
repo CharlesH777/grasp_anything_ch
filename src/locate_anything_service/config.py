@@ -33,6 +33,7 @@ class Settings:
     collision_threshold: float = 0.0
     collision_outside_threshold: float = 0.0
     max_upload_mb: int = 25
+    max_image_pixels: int = 16000000
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
@@ -112,6 +113,9 @@ class Settings:
                 os.getenv("LOCATE_COLLISION_OUTSIDE_THRESHOLD", "0")
             ),
             max_upload_mb=int(os.getenv("LOCATE_MAX_UPLOAD_MB", "25")),
+            max_image_pixels=int(
+                os.getenv("LOCATE_MAX_IMAGE_PIXELS", "16000000")
+            ),
             host=os.getenv("LOCATE_HOST", defaults.host),
             port=int(os.getenv("LOCATE_PORT", "8000")),
             log_level=os.getenv("LOCATE_LOG_LEVEL", defaults.log_level),

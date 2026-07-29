@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,24 @@ GRASP_RECT_PREVIOUS_PHASE = {
     "multigt": "geometry",
     "negative": "multigt",
     "collision": "negative",
+}
+JOINT_LATER_PHASES = {
+    "sft",
+    "structured_r0",
+    "structured",
+    "geometry",
+    "negative",
+    "multigt",
+    "collision",
+}
+JOINT_PREVIOUS_PHASE = {
+    "sft": "overfit",
+    "structured_r0": "sft",
+    "structured": "structured_r0",
+    "geometry": "structured",
+    "negative": "geometry",
+    "multigt": "negative",
+    "collision": "multigt",
 }
 REALVLG_OFFICIAL_COMMIT = "040562e0cf8f64a8c6e922d8f7e5e098bb3633c3"
 FROZEN_OFFICIAL_SPLIT_COUNTS = {
@@ -113,6 +132,8 @@ def _phase_contract(task: str) -> tuple[set[str], dict[str, str], str]:
             GRASP_RECT_PREVIOUS_PHASE,
             "GRASP_RECT_PHASE",
         )
+    if task == "joint":
+        return JOINT_LATER_PHASES, JOINT_PREVIOUS_PHASE, "JOINT_PHASE"
     raise ValueError(f"unsupported phase-transition task: {task!r}")
 
 
@@ -185,6 +206,55 @@ def _validate_acceptance(
         metrics = acceptance.get("metrics")
         if not isinstance(metrics, dict):
             raise ValueError("overfit phase acceptance needs a metrics object")
+        if task == "joint":
+            for task_name in ("contact", "grasp_rect"):
+                task_metrics = metrics.get(task_name)
+                if not isinstance(task_metrics, dict):
+                    raise ValueError(
+                        f"joint overfit acceptance needs {task_name} metrics"
+                    )
+                for name, threshold in (
+                    ("format_valid_rate", 0.99),
+                    ("coordinate_top1_accuracy", 0.95),
+                ):
+                    value = task_metrics.get(name)
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, int | float)
+                        or not 0.0 <= float(value) <= 1.0
+                        or value < threshold
+                    ):
+                        raise ValueError(
+                            f"joint overfit {task_name} {name}={value!r} is "
+                            f"below {threshold}"
+                        )
+            for name, threshold in (
+                ("width_valid_rate", 1.0),
+                ("complete_six_slot_rate", 0.99),
+                ("miou_oracle_ratio", 0.95),
+            ):
+                value = metrics["grasp_rect"].get(name)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int | float)
+                    or value < threshold
+                ):
+                    raise ValueError(
+                        f"joint overfit grasp_rect {name}={value!r} is below "
+                        f"{threshold}"
+                    )
+            grounding_retention = metrics.get("grounding_retention_ratio")
+            if (
+                isinstance(grounding_retention, bool)
+                or not isinstance(grounding_retention, int | float)
+                or not math.isfinite(float(grounding_retention))
+                or float(grounding_retention) < 0.0
+                or grounding_retention < 0.98
+            ):
+                raise ValueError(
+                    "joint overfit grounding_retention_ratio must be at least 0.98"
+                )
+            return
         thresholds = {
             "format_valid_rate": 0.99,
             "coordinate_top1_accuracy": 0.95,
@@ -225,23 +295,34 @@ def _validate_grasp_checkpoint(
     config = _load_json(config_path)
     if not isinstance(config, dict):
         raise ValueError(f"checkpoint config must be a JSON object: {config_path}")
-    task_token_key = (
-        "grasp_rect_task_token_ids"
-        if task == "grasp_rect"
-        else "grasp_task_token_ids"
-    )
-    task_token_ids = config.get(task_token_key)
-    if (
-        not isinstance(task_token_ids, list)
-        or len(task_token_ids) != 2
-        or not all(isinstance(value, int) for value in task_token_ids)
-        or task_token_ids[0] == task_token_ids[1]
-    ):
-        checkpoint_label = "grasp" if task == "contact" else "grasp_rect"
-        raise ValueError(
-            f"{path} is not a {checkpoint_label} checkpoint: config.json needs "
-            f"two distinct {task_token_key}"
-        )
+    task_token_keys = {
+        "contact": ("grasp_task_token_ids",),
+        "grasp_rect": ("grasp_rect_task_token_ids",),
+        "joint": ("grasp_task_token_ids", "grasp_rect_task_token_ids"),
+    }[task]
+    all_task_token_ids: list[int] = []
+    for task_token_key in task_token_keys:
+        task_token_ids = config.get(task_token_key)
+        if (
+            not isinstance(task_token_ids, list)
+            or len(task_token_ids) != 2
+            or not all(isinstance(value, int) for value in task_token_ids)
+            or task_token_ids[0] == task_token_ids[1]
+        ):
+            checkpoint_label = {
+                "contact": "grasp",
+                "grasp_rect": "grasp_rect",
+                "joint": "joint",
+            }[task]
+            raise ValueError(
+                f"{path} is not a {checkpoint_label} checkpoint: config.json needs two "
+                f"distinct {task_token_key}"
+            )
+        all_task_token_ids.extend(task_token_ids)
+    if len(set(all_task_token_ids)) != len(all_task_token_ids):
+        raise ValueError("structured task token IDs must be distinct across tasks")
+    if task == "joint" and config.get("joint_task_enabled") is not True:
+        raise ValueError("joint checkpoint config must set joint_task_enabled=true")
     lora_rank = config.get("use_llm_lora", 0)
     if not isinstance(lora_rank, int | float) or lora_rank <= 0:
         raise ValueError(
@@ -249,10 +330,15 @@ def _validate_grasp_checkpoint(
             "be positive"
         )
     weight_keys = _checkpoint_weight_keys(path)
-    adapter_prefix = "grasp_rect_task" if task == "grasp_rect" else "grasp_task"
+    adapter_prefixes = {
+        "contact": ("grasp_task",),
+        "grasp_rect": ("grasp_rect_task",),
+        "joint": ("grasp_task", "grasp_rect_task"),
+    }[task]
     required_adapter_keys = {
-        f"{adapter_prefix}_embedding_delta",
-        f"{adapter_prefix}_output_delta",
+        f"{adapter_prefix}_{suffix}"
+        for adapter_prefix in adapter_prefixes
+        for suffix in ("embedding_delta", "output_delta")
     }
     missing_adapters = [
         required
@@ -278,18 +364,20 @@ def _validate_grasp_checkpoint(
             "checkpoint trainer_state has no positive global_step: "
             f"{trainer_state_path}"
         )
-    state_name = (
-        "grasp_rect_trainer_state.json"
-        if task == "grasp_rect"
-        else "grasp_contact_trainer_state.json"
-    )
+    state_name = {
+        "contact": "grasp_contact_trainer_state.json",
+        "grasp_rect": "grasp_rect_trainer_state.json",
+        "joint": "joint_trainer_state.json",
+    }[task]
     state_path = path / state_name
     task_state = _load_json(state_path)
-    seen_key = (
-        "seen_grasp_rect_blocks" if task == "grasp_rect" else "seen_contact_blocks"
-    )
-    if not isinstance(task_state, dict) or not isinstance(
-        task_state.get(seen_key), int
+    seen_keys = {
+        "contact": ("seen_contact_blocks",),
+        "grasp_rect": ("seen_grasp_rect_blocks",),
+        "joint": ("seen_contact_blocks", "seen_grasp_rect_blocks"),
+    }[task]
+    if not isinstance(task_state, dict) or any(
+        not isinstance(task_state.get(seen_key), int) for seen_key in seen_keys
     ):
         raise ValueError(f"invalid {task} trainer state: {state_path}")
     training_phase = task_state.get("training_phase")
@@ -373,7 +461,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--phase", required=True)
     parser.add_argument(
-        "--task", choices=("contact", "grasp_rect"), default="contact"
+        "--task", choices=("contact", "grasp_rect", "joint"), default="contact"
     )
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--meta-path", type=Path, required=True)

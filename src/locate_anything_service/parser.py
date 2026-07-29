@@ -27,6 +27,11 @@ GRASP_RECT_END_PATTERN = re.compile(r"</grasp_rect>", re.IGNORECASE)
 GRASP_RECT_PAYLOAD_PATTERN = re.compile(
     r"<grasp_rect>(.*?)</grasp_rect>", re.IGNORECASE | re.DOTALL
 )
+# 方案 A: bbox 模式下模型误输出 <grasp> 时的 fallback 解析 pattern。
+# 只匹配恰好 4 个坐标 token 的 <grasp> 块，把接触点对当作 bbox 包围框。
+GRASP_AS_BOX_PATTERN = re.compile(
+    r"<grasp>((?:<-?\d+(?:\.\d+)?>){4})</grasp>", re.IGNORECASE | re.DOTALL
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +105,44 @@ def parse_output(text: str, image_width: int, image_height: int) -> ParsedOutput
                     pixels=(round(x * image_width), round(y * image_height)),
                 )
             )
+
+    # 方案 A: bbox 模式下模型误输出 <grasp>（接触点对）时的 fallback。
+    # 当模型在抓取场景图上被训练先验带偏、在 ground_single/detect 等 bbox
+    # 模式下输出 <grasp><x1><y1><x2><y2></grasp> 而非 <box> 时，把两个
+    # 接触点转成包围框（min/max），让用户至少能在 UI 上看到预测位置。
+    # 只在没有 <box> 解析结果时触发，避免与真正的 <box> 重复。
+    if not boxes:
+        for match in GRASP_AS_BOX_PATTERN.finditer(text):
+            payload = match.group(1)
+            values = [float(value) for value in NUMBER_PATTERN.findall(payload)]
+            if len(values) >= 4:
+                raw = tuple(values[:4])
+                x1, y1, x2, y2 = raw
+                # 接触点对转包围框：min/max 保证 x1<x2, y1<y2
+                bx1, by1, bx2, by2 = (
+                    min(x1, x2),
+                    min(y1, y2),
+                    max(x1, x2),
+                    max(y1, y2),
+                )
+                normalized = tuple(
+                    _to_normalized(v) for v in (bx1, by1, bx2, by2)
+                )
+                nx1, ny1, nx2, ny2 = normalized
+                label = _label_before(text, match.start()) or "grasp"
+                boxes.append(
+                    Box(
+                        label=label,
+                        coordinates_1000=(bx1, by1, bx2, by2),
+                        normalized=normalized,
+                        pixels=(
+                            round(nx1 * image_width),
+                            round(ny1 * image_height),
+                            round(nx2 * image_width),
+                            round(ny2 * image_height),
+                        ),
+                    )
+                )
 
     return ParsedOutput(boxes=boxes, points=points)
 

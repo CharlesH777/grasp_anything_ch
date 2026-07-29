@@ -41,6 +41,40 @@ def test_coordinate_one_uses_thousand_point_scale() -> None:
     assert parsed.boxes[0].pixels == (1, 1, 500, 500)
 
 
+def test_parse_output_falls_back_to_grasp_as_box() -> None:
+    """方案 A: bbox 模式下模型误输出 <grasp> 时，当作包围框解析。"""
+    output = "<ref>grasp</ref><grasp><100><250><700><900></grasp>"
+    parsed = parse_output(output, image_width=1000, image_height=1000)
+
+    assert len(parsed.boxes) == 1
+    assert parsed.boxes[0].label == "grasp"
+    # 接触点 (100,250)-(700,900) 转包围框 → (100,250,700,900)
+    assert parsed.boxes[0].normalized == (0.1, 0.25, 0.7, 0.9)
+    assert parsed.boxes[0].pixels == (100, 250, 700, 900)
+
+
+def test_parse_output_grasp_fallback_swaps_endpoints_for_bbox() -> None:
+    """接触点对不保证 x1<x2, y1<y2，需用 min/max 转成合法包围框。"""
+    output = "<ref>grasp</ref><grasp><700><900><100><250></grasp>"
+    parsed = parse_output(output, image_width=1000, image_height=1000)
+
+    assert len(parsed.boxes) == 1
+    assert parsed.boxes[0].normalized == (0.1, 0.25, 0.7, 0.9)
+
+
+def test_parse_output_prefers_box_over_grasp_fallback() -> None:
+    """同时存在 <box> 和 <grasp> 时，只解析 <box>，不重复。"""
+    output = (
+        "<ref>cup</ref><box><10><20><30><40></box>"
+        "<ref>grasp</ref><grasp><100><200><300><400></grasp>"
+    )
+    parsed = parse_output(output, image_width=1000, image_height=1000)
+
+    assert len(parsed.boxes) == 1
+    assert parsed.boxes[0].label == "cup"
+    assert parsed.boxes[0].normalized == (0.01, 0.02, 0.03, 0.04)
+
+
 def test_parse_grasp_uses_x1_y1_x2_y2_slot_order() -> None:
     output = "<ref>grasp</ref><grasp><100><250><700><900></grasp>"
     parsed = parse_grasp_output(output, image_width=2000, image_height=1000)

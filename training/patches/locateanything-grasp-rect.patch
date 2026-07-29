@@ -1,51 +1,5 @@
-diff --git a/Embodied/deepspeed_configs/zero_stage2_torch_adam_config.json b/Embodied/deepspeed_configs/zero_stage2_torch_adam_config.json
-new file mode 100644
-index 0000000..54de9ae
---- /dev/null
-+++ b/Embodied/deepspeed_configs/zero_stage2_torch_adam_config.json
-@@ -0,0 +1,40 @@
-+{
-+  "zero_optimization": {
-+    "stage": 2,
-+    "allgather_partitions": true,
-+    "allgather_bucket_size": 100000000,
-+    "overlap_comm": true,
-+    "reduce_scatter": true,
-+    "reduce_bucket_size": 100000000,
-+    "contiguous_gradients": true
-+  },
-+  "fp16": {
-+    "enabled": "auto",
-+    "auto_cast": true,
-+    "loss_scale": 0,
-+    "initial_scale_power": 32,
-+    "loss_scale_window": 1000,
-+    "hysteresis": 2,
-+    "min_loss_scale": 1
-+  },
-+  "bf16": {
-+    "enabled": "auto"
-+  },
-+  "optimizer": {
-+    "type": "AdamW",
-+    "params": {
-+      "lr": "auto",
-+      "betas": [0.9, 0.999],
-+      "eps": 1e-8,
-+      "weight_decay": "auto",
-+      "torch_adam": true,
-+      "adam_w_mode": true
-+    }
-+  },
-+  "gradient_accumulation_steps": "auto",
-+  "gradient_clipping": "auto",
-+  "steps_per_print": 2000,
-+  "train_batch_size": "auto",
-+  "train_micro_batch_size_per_gpu": "auto",
-+  "wall_clock_breakdown": false
-+}
 diff --git a/Embodied/eaglevl/dist_utils.py b/Embodied/eaglevl/dist_utils.py
-index 1a33d80..e4af5e2 100644
+index 1a33d80c73a1125b7145f63467dce06634ff2466..e4af5e251a008ae6b663eb388dea5d0011f3046a 100644
 --- a/Embodied/eaglevl/dist_utils.py
 +++ b/Embodied/eaglevl/dist_utils.py
 @@ -3,8 +3,6 @@ import socket
@@ -72,7 +26,7 @@ index 1a33d80..e4af5e2 100644
      print("MASTER_ADDR:",os.environ.get("MASTER_ADDR", None))
      """Initialize slurm distributed training environment.
 diff --git a/Embodied/eaglevl/model/locany/configuration_locateanything.py b/Embodied/eaglevl/model/locany/configuration_locateanything.py
-index 35b2810..b66279f 100644
+index 35b281084c61646aa0443cb5ca67847bf756662a..b66279fd63c5e5915641cb4456a2ae3a160429fa 100644
 --- a/Embodied/eaglevl/model/locany/configuration_locateanything.py
 +++ b/Embodied/eaglevl/model/locany/configuration_locateanything.py
 @@ -50,6 +50,7 @@ class LocateAnythingConfig(PretrainedConfig):
@@ -100,7 +54,7 @@ index 35b2810..b66279f 100644
          output['template'] = self.template
          output['image_token_index'] = self.image_token_index
 diff --git a/Embodied/eaglevl/model/locany/mask_sdpa_utils.py b/Embodied/eaglevl/model/locany/mask_sdpa_utils.py
-index 8b216b5..1b39e16 100644
+index 8b216b555f3d6f86f28c7ecadfa8254da07826e2..1b39e163057f399f67b434193e34e5f4f129b892 100644
 --- a/Embodied/eaglevl/model/locany/mask_sdpa_utils.py
 +++ b/Embodied/eaglevl/model/locany/mask_sdpa_utils.py
 @@ -190,6 +190,9 @@ def create_block_diff_mask_by_pe_4d(
@@ -124,7 +78,7 @@ index 8b216b5..1b39e16 100644
      attention_mask = torch.full((seq_len, seq_len), float('-inf'), dtype=torch.bfloat16, device=device)
      attention_mask.masked_fill_(final_mask, 0.0)
 diff --git a/Embodied/eaglevl/model/locany/modeling_locateanything.py b/Embodied/eaglevl/model/locany/modeling_locateanything.py
-index 765f0cd..f5f6e89 100644
+index 765f0cd3e3ece42608e944548ee4257d1918433c..f5f6e898277585b1d2e2f64fa36952273d1a5562 100644
 --- a/Embodied/eaglevl/model/locany/modeling_locateanything.py
 +++ b/Embodied/eaglevl/model/locany/modeling_locateanything.py
 @@ -18,7 +18,7 @@ from .modeling_qwen2 import Qwen2ForCausalLM
@@ -896,7 +850,7 @@ index 765f0cd..f5f6e89 100644
          if not return_dict:
              output = (logits,) + outputs[1:]
 diff --git a/Embodied/eaglevl/model/moon_vit/modeling_vit.py b/Embodied/eaglevl/model/moon_vit/modeling_vit.py
-index f93a43d..6b47308 100644
+index f93a43dd50c93da22c8a315a9ead8abd4b446374..6b473083fdae2bacc7ca20bba3099369a20aa23a 100644
 --- a/Embodied/eaglevl/model/moon_vit/modeling_vit.py
 +++ b/Embodied/eaglevl/model/moon_vit/modeling_vit.py
 @@ -119,23 +119,25 @@ def sdpa_attention(
@@ -954,7 +908,7 @@ index f93a43d..6b47308 100644
          self, pixel_values: torch.Tensor, grid_hws: torch.Tensor
      ) -> torch.Tensor:
 diff --git a/Embodied/eaglevl/train/arguments.py b/Embodied/eaglevl/train/arguments.py
-index bd8fa33..76c2c50 100644
+index bd8fa3350b14f32e3542d906a2f8a70627ca9075..7325d2576e28c4f8d56cc3f97326a12d9cbbf054 100644
 --- a/Embodied/eaglevl/train/arguments.py
 +++ b/Embodied/eaglevl/train/arguments.py
 @@ -54,6 +54,15 @@ class ModelArguments:
@@ -973,7 +927,7 @@ index bd8fa33..76c2c50 100644
      use_llm_lora: int = field(
          default=0,
          metadata={'help': 'Set the LoRA adapter rank for the LLM. Default is 0.'}
-@@ -116,6 +125,86 @@ class ModelArguments:
+@@ -116,6 +125,95 @@ class ModelArguments:
          default=3,
          metadata={'help': 'expected mask repeat time.'},
      )
@@ -1038,6 +992,15 @@ index bd8fa33..76c2c50 100644
 +            )
 +        },
 +    )
++    joint_task_enabled: bool = field(
++        default=False,
++        metadata={
++            'help': (
++                'Train Contact and grasp-rectangle task adapters together in '
++                'one shared checkpoint. Requires grasp_rect_task_enabled.'
++            )
++        },
++    )
 +    grasp_rect_pose_weight: float = field(
 +        default=1.0,
 +        metadata={'help': 'Weight for four-slot rectangular-grasp CE.'},
@@ -1060,7 +1023,7 @@ index bd8fa33..76c2c50 100644
  
  
  @dataclass
-@@ -195,4 +284,22 @@ class DataTrainingArguments:
+@@ -195,4 +293,22 @@ class DataTrainingArguments:
      auto_thinking_handler: bool = field(
          default=False,
          metadata={'help': 'Set to True to auto handle thinking mode format. Default is False.'}
@@ -1085,896 +1048,8 @@ index bd8fa33..76c2c50 100644
 +            )
 +        },
 +    )
-diff --git a/Embodied/eaglevl/train/grasp_contact.py b/Embodied/eaglevl/train/grasp_contact.py
-new file mode 100644
-index 0000000..666ead4
---- /dev/null
-+++ b/Embodied/eaglevl/train/grasp_contact.py
-@@ -0,0 +1,585 @@
-+"""Loss utilities for joint two-contact-point PBD training."""
-+
-+from __future__ import annotations
-+
-+import math
-+from dataclasses import dataclass
-+
-+import torch
-+import torch.nn.functional as F
-+
-+
-+@dataclass
-+class ContactLossOutput:
-+    pair_sum: torch.Tensor
-+    center_sum: torch.Tensor
-+    angle_sum: torch.Tensor
-+    width_sum: torch.Tensor
-+    contact_count: torch.Tensor
-+    geometry_active_count: torch.Tensor
-+    coord_mass_min: torch.Tensor
-+    coord_entropy_max: torch.Tensor
-+
-+
-+def compute_task_adapter_cross_entropy(
-+    lm_head: torch.nn.Module,
-+    hidden_states: torch.Tensor,
-+    labels: torch.Tensor,
-+) -> torch.Tensor:
-+    """Compute summed CE through the same hooked LM head used by inference."""
-+    if hidden_states.ndim != 2 or labels.ndim != 1:
-+        raise ValueError(
-+            "task-adapter CE expects [tokens, hidden] and [tokens]: "
-+            f"hidden={tuple(hidden_states.shape)}, labels={tuple(labels.shape)}"
-+        )
-+    if hidden_states.shape[0] != labels.shape[0] or labels.numel() == 0:
-+        raise ValueError(
-+            "task-adapter CE requires one non-empty label per hidden state: "
-+            f"hidden={hidden_states.shape[0]}, labels={labels.numel()}"
-+        )
-+    logits = lm_head(hidden_states)
-+    if not torch.isfinite(logits).all():
-+        raise FloatingPointError("non-finite logits after grasp output adapter")
-+    return F.cross_entropy(logits.float(), labels, reduction="sum")
-+
-+
-+def combine_base_and_pair_ce(
-+    base_loss_sum: torch.Tensor,
-+    pair_loss_sum: torch.Tensor,
-+    global_ce_token_count: torch.Tensor | float | int,
-+    pair_weight: float = 1.0,
-+) -> torch.Tensor:
-+    """Replace four coordinate-token CEs without changing token-level scale.
-+
-+    ``pair_loss_sum`` contains one four-slot *mean* per contact block.  Convert
-+    it back to a token numerator before combining it with the non-coordinate CE
-+    numerator.  The denominator must therefore include all valid labels,
-+    including the four coordinate slots owned by pair loss.
-+    """
-+    denominator = torch.as_tensor(
-+        global_ce_token_count,
-+        device=base_loss_sum.device,
-+        dtype=torch.float32,
-+    ).clamp_min(1.0)
-+    pair_token_sum = 4.0 * pair_loss_sum
-+    return (
-+        base_loss_sum + float(pair_weight) * pair_token_sum
-+    ) / denominator
-+
-+
-+@torch.no_grad()
-+def compute_coordinate_token_metrics(
-+    lm_head: torch.nn.Module,
-+    hidden_states: torch.Tensor,
-+    labels: torch.Tensor,
-+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-+    """Measure coordinate-token CE and top-1 accuracy without adding loss."""
-+    if hidden_states.ndim != 2 or labels.ndim != 1:
-+        raise ValueError(
-+            "coordinate metrics expect [tokens, hidden] and [tokens]: "
-+            f"hidden={tuple(hidden_states.shape)}, labels={tuple(labels.shape)}"
-+        )
-+    if hidden_states.shape[0] != labels.shape[0] or labels.numel() == 0:
-+        raise ValueError(
-+            "coordinate metrics require one non-empty label per hidden state"
-+        )
-+    logits = lm_head(hidden_states)
-+    if not torch.isfinite(logits).all():
-+        raise FloatingPointError(
-+            "non-finite logits while computing coordinate-token metrics"
-+        )
-+    logits = logits.float()
-+    ce_sum = F.cross_entropy(logits, labels, reduction="sum")
-+    correct = logits.argmax(dim=-1).eq(labels).sum()
-+    count = labels.new_tensor(labels.numel())
-+    return ce_sum.detach(), correct.detach(), count.detach()
-+
-+
-+def configure_llm_lora(model, requested_rank: int) -> bool:
-+    """Install LLM LoRA once and keep adapters trainable after base freezing.
-+
-+    Returns True when a new adapter is installed and False when an adapter from
-+    a checkpoint is reused.
-+    """
-+    requested_rank = int(requested_rank)
-+    if requested_rank <= 0:
-+        raise ValueError("LLM LoRA rank must be positive")
-+
-+    configured_rank = int(
-+        getattr(model.config, "use_llm_lora", 0) or 0
-+    )
-+    already_wrapped = bool(getattr(model, "use_llm_lora", False))
-+    if already_wrapped:
-+        if configured_rank != requested_rank:
-+            raise ValueError(
-+                "LoRA checkpoint rank does not match requested rank: "
-+                f"checkpoint={configured_rank}, requested={requested_rank}"
-+            )
-+        adapter_parameters = [
-+            parameter
-+            for name, parameter in model.language_model.named_parameters()
-+            if "lora_" in name
-+        ]
-+        if not adapter_parameters:
-+            raise ValueError("model reports LLM LoRA but has no adapter parameters")
-+        for parameter in adapter_parameters:
-+            parameter.requires_grad = True
-+        model.language_model.enable_input_require_grads()
-+        return False
-+
-+    if configured_rank:
-+        raise ValueError(
-+            "model config requests LLM LoRA but the model is not wrapped: "
-+            f"rank={configured_rank}"
-+        )
-+    model.wrap_llm_lora(
-+        r=requested_rank,
-+        lora_alpha=2 * requested_rank,
-+        lora_dropout=0.05,
-+    )
-+    model.config.use_llm_lora = requested_rank
-+    return True
-+
-+
-+def enable_task_token_training(model, token_ids: list[int]) -> int:
-+    """Enable compact grasp-token input/output adapters."""
-+    unique_ids = sorted({int(token_id) for token_id in token_ids})
-+    if not unique_ids:
-+        raise ValueError("task token IDs must not be empty")
-+    configured_ids = sorted(
-+        int(token_id)
-+        for token_id in getattr(model.config, "grasp_task_token_ids", [])
-+    )
-+    if configured_ids != unique_ids:
-+        raise ValueError(
-+            "grasp task token IDs differ from the model configuration: "
-+            f"configured={configured_ids}, requested={unique_ids}"
-+        )
-+    input_adapter = getattr(model, "grasp_task_embedding_delta", None)
-+    output_adapter = getattr(model, "grasp_task_output_delta", None)
-+    if (
-+        input_adapter is None
-+        or output_adapter is None
-+        or input_adapter.shape[0] != len(unique_ids)
-+        or output_adapter.shape != input_adapter.shape
-+    ):
-+        raise ValueError("model has no compatible grasp task embedding adapter")
-+    for embedding in (
-+        model.language_model.get_input_embeddings(),
-+        model.language_model.get_output_embeddings(),
-+    ):
-+        if embedding.weight.requires_grad:
-+            raise ValueError("base embedding/lm_head must remain frozen")
-+    input_adapter.requires_grad = True
-+    output_adapter.requires_grad = True
-+    return model.register_grasp_task_embedding_hook()
-+
-+
-+def enable_grasp_rect_task_token_training(
-+    model, token_ids: list[int]
-+) -> int:
-+    """Enable the independent rectangular-grasp token adapters."""
-+    unique_ids = sorted({int(token_id) for token_id in token_ids})
-+    configured_ids = sorted(
-+        int(token_id)
-+        for token_id in getattr(model.config, "grasp_rect_task_token_ids", [])
-+    )
-+    if configured_ids != unique_ids or not unique_ids:
-+        raise ValueError(
-+            "grasp rect task token IDs differ from model configuration: "
-+            f"configured={configured_ids}, requested={unique_ids}"
-+        )
-+    input_adapter = getattr(model, "grasp_rect_task_embedding_delta", None)
-+    output_adapter = getattr(model, "grasp_rect_task_output_delta", None)
-+    if (
-+        input_adapter is None
-+        or output_adapter is None
-+        or input_adapter.shape[0] != len(unique_ids)
-+        or output_adapter.shape != input_adapter.shape
-+    ):
-+        raise ValueError("model has no compatible grasp rect task adapter")
-+    for embedding in (
-+        model.language_model.get_input_embeddings(),
-+        model.language_model.get_output_embeddings(),
-+    ):
-+        if embedding.weight.requires_grad:
-+            raise ValueError("base embedding/lm_head must remain frozen")
-+    input_adapter.requires_grad = True
-+    output_adapter.requires_grad = True
-+    return model.register_grasp_rect_task_embedding_hook()
-+
-+
-+def freeze_task_token_adapters(model) -> int:
-+    """Freeze every structured-task delta before enabling one active task."""
-+    frozen_parameters = 0
-+    for name in (
-+        "grasp_task_embedding_delta",
-+        "grasp_task_output_delta",
-+        "grasp_rect_task_embedding_delta",
-+        "grasp_rect_task_output_delta",
-+    ):
-+        parameter = getattr(model, name, None)
-+        if parameter is None:
-+            continue
-+        parameter.requires_grad = False
-+        frozen_parameters += parameter.numel()
-+    return frozen_parameters
-+
-+
-+def register_all_task_token_hooks(model) -> int:
-+    """Reattach both task hooks after embedding or LM-head replacement."""
-+    registered_parameters = 0
-+    for method_name in (
-+        "register_grasp_task_embedding_hook",
-+        "register_grasp_rect_task_embedding_hook",
-+    ):
-+        method = getattr(model, method_name, None)
-+        if method is not None:
-+            registered_parameters += int(method())
-+    return registered_parameters
-+
-+
-+def activate_task_token_adapter(
-+    model, task: str, token_ids: list[int]
-+) -> int:
-+    """Freeze both adapters, reattach both hooks, and enable only one task."""
-+    freeze_task_token_adapters(model)
-+    register_all_task_token_hooks(model)
-+    if task == "grasp_contact":
-+        return enable_task_token_training(model, token_ids)
-+    if task == "grasp_rect":
-+        return enable_grasp_rect_task_token_training(model, token_ids)
-+    raise ValueError(f"unsupported structured task adapter: {task!r}")
-+
-+
-+def initialize_missing_task_adapters(model, missing_keys: list[str]) -> int:
-+    """Zero only task adapters absent from the loaded checkpoint.
-+
-+    Transformers may run its generic missing-weight initializer after the model
-+    constructor, so constructor-level ``torch.zeros`` is not sufficient.  A
-+    resumed grasp checkpoint must retain its learned adapter values, however.
-+    """
-+    missing_names = {
-+        key.rsplit(".", 1)[-1]
-+        for key in missing_keys
-+    }
-+    initialized_parameters = 0
-+    for name in (
-+        "grasp_task_embedding_delta",
-+        "grasp_task_output_delta",
-+        "grasp_rect_task_embedding_delta",
-+        "grasp_rect_task_output_delta",
-+    ):
-+        parameter = getattr(model, name, None)
-+        if parameter is None:
-+            continue
-+        if name in missing_names:
-+            with torch.no_grad():
-+                parameter.zero_()
-+            initialized_parameters += parameter.numel()
-+        if not torch.isfinite(parameter).all():
-+            raise FloatingPointError(
-+                f"Non-finite values in loaded task adapter: {name}"
-+            )
-+    return initialized_parameters
-+
-+
-+def validate_coordinate_token_range(start_token_id: int, end_token_id: int) -> None:
-+    if end_token_id - start_token_id != 1000:
-+        raise ValueError(
-+            "contact loss requires exactly 1001 contiguous coordinate tokens; "
-+            f"got IDs [{start_token_id}, {end_token_id}]"
-+        )
-+
-+
-+def pi_periodic_angle_loss(cosine: torch.Tensor) -> torch.Tensor:
-+    """Return a stable, endpoint-exchange-invariant angular loss.
-+
-+    The forward value is ``1 - |cos(theta)|``.  Expressing the absolute value
-+    with an explicit branch gives the ambiguous 90-degree case a deterministic
-+    non-zero subgradient.  In contrast, ``1 - cos(theta)^2`` has exactly zero
-+    gradient at 90 degrees and cannot recover from that worst-case prediction.
-+    """
-+    cosine = cosine.clamp(-1.0, 1.0)
-+    aligned_cosine = torch.where(cosine >= 0.0, cosine, -cosine)
-+    return 1.0 - aligned_cosine
-+
-+
-+def _empty_output(hidden_states: torch.Tensor) -> ContactLossOutput:
-+    zero = hidden_states.sum() * 0.0
-+    scalar_zero = zero.detach().new_zeros(())
-+    return ContactLossOutput(
-+        pair_sum=zero,
-+        center_sum=zero,
-+        angle_sum=zero,
-+        width_sum=zero,
-+        contact_count=scalar_zero,
-+        geometry_active_count=scalar_zero,
-+        # Neutral sentinel for a cross-rank MIN reduction when this rank has
-+        # no positive contact block.
-+        coord_mass_min=scalar_zero.new_ones(()),
-+        coord_entropy_max=scalar_zero,
-+    )
-+
-+
-+def _filter_colliding_candidates(
-+    candidate_mask: torch.Tensor,
-+    candidate_collision_2d: torch.Tensor | None,
-+    candidate_outside_2d: torch.Tensor | None,
-+    collision_valid: torch.Tensor | None,
-+    collision_threshold: float,
-+    outside_threshold: float,
-+) -> torch.Tensor:
-+    if candidate_collision_2d is None and candidate_outside_2d is None:
-+        return candidate_mask
-+
-+    safe_candidates = candidate_mask.clone()
-+    filterable = torch.zeros(
-+        (candidate_mask.shape[0], 1),
-+        dtype=torch.bool,
-+        device=candidate_mask.device,
-+    )
-+    if candidate_outside_2d is not None:
-+        outside_finite = torch.isfinite(candidate_outside_2d)
-+        outside_known = (outside_finite | ~candidate_mask).all(
-+            dim=-1, keepdim=True
-+        )
-+        outside_safe = outside_finite & (
-+            candidate_outside_2d <= outside_threshold
-+        )
-+        safe_candidates &= torch.where(
-+            outside_known, outside_safe, candidate_mask
-+        )
-+        filterable |= outside_known
-+
-+    if candidate_collision_2d is not None and collision_valid is not None:
-+        collision_known = collision_valid.bool().unsqueeze(-1)
-+        collision_safe = torch.isfinite(candidate_collision_2d) & (
-+            candidate_collision_2d <= collision_threshold
-+        )
-+        safe_candidates &= torch.where(
-+            collision_known, collision_safe, candidate_mask
-+        )
-+        filterable |= collision_known
-+
-+    return torch.where(filterable, safe_candidates, candidate_mask)
-+
-+
-+def compute_contact_auxiliary_losses(
-+    *,
-+    hidden_states: torch.Tensor,
-+    lm_head_weight: torch.Tensor,
-+    lm_head: torch.nn.Module | None = None,
-+    contact_mtp_coord_mask: torch.Tensor,
-+    contact_candidates: torch.Tensor,
-+    contact_candidate_mask: torch.Tensor,
-+    contact_positive_mask: torch.Tensor,
-+    contact_image_size: torch.Tensor,
-+    coord_start_token_id: int,
-+    coord_end_token_id: int,
-+    candidate_collision_2d: torch.Tensor | None = None,
-+    candidate_outside_2d: torch.Tensor | None = None,
-+    collision_valid: torch.Tensor | None = None,
-+    collision_threshold: float = 0.0,
-+    outside_threshold: float = 0.0,
-+    coord_mass_threshold: float = 0.35,
-+    coord_entropy_threshold: float = 0.85,
-+    minimum_width_diagonal: float = 1e-4,
-+) -> ContactLossOutput:
-+    """Compute hard-min pair CE and gated image-space geometry losses.
-+
-+    ``contact_mtp_coord_mask`` is label-aligned. The causal shift is applied here,
-+    so each selected hidden state predicts one of the four coordinate labels.
-+    """
-+
-+    validate_coordinate_token_range(coord_start_token_id, coord_end_token_id)
-+    if contact_mtp_coord_mask.shape != hidden_states.shape[:2]:
-+        raise ValueError(
-+            "contact coordinate mask must match hidden sequence shape: "
-+            f"mask={tuple(contact_mtp_coord_mask.shape)}, "
-+            f"hidden={tuple(hidden_states.shape[:2])}"
-+        )
-+
-+    shift_mask = contact_mtp_coord_mask[..., 1:].bool().reshape(-1)
-+    selected_hidden = hidden_states[..., :-1, :].reshape(
-+        -1, hidden_states.shape[-1]
-+    )[shift_mask]
-+    if selected_hidden.numel() == 0:
-+        if contact_positive_mask.bool().any():
-+            raise ValueError("positive contact sample has no four-coordinate MTP block")
-+        return _empty_output(hidden_states)
-+    if selected_hidden.shape[0] % 4 != 0:
-+        raise ValueError(
-+            "contact MTP coordinate mask must select a multiple of four slots; "
-+            f"got {selected_hidden.shape[0]}"
-+        )
-+
-+    block_count = selected_hidden.shape[0] // 4
-+    positive_indices = contact_positive_mask.bool().nonzero(as_tuple=False).flatten()
-+    if positive_indices.numel() != block_count:
-+        raise ValueError(
-+            "positive sample/contact block count mismatch: "
-+            f"positive_samples={positive_indices.numel()}, blocks={block_count}"
-+        )
-+
-+    candidates = contact_candidates[positive_indices].long()
-+    candidate_mask = contact_candidate_mask[positive_indices].bool()
-+    image_size = contact_image_size[positive_indices].float()
-+    if candidates.ndim != 3 or candidates.shape[-1] != 4:
-+        raise ValueError(
-+            "contact_candidates must have shape [samples, K, 4], "
-+            f"got {candidates.shape}"
-+        )
-+    if not candidate_mask.any(dim=-1).all():
-+        raise ValueError("every positive contact sample needs at least one candidate")
-+    if (candidates[candidate_mask] < 0).any() or (
-+        candidates[candidate_mask] > 1000
-+    ).any():
-+        raise ValueError("contact candidate values must be in [0, 1000]")
-+    if (image_size <= 0).any() or not torch.isfinite(image_size).all():
-+        raise ValueError("positive contact samples need finite positive image sizes")
-+
-+    if candidate_collision_2d is not None:
-+        candidate_collision_2d = candidate_collision_2d[positive_indices].float()
-+    if candidate_outside_2d is not None:
-+        candidate_outside_2d = candidate_outside_2d[positive_indices].float()
-+    if collision_valid is not None:
-+        collision_valid = collision_valid[positive_indices].bool()
-+    effective_mask = _filter_colliding_candidates(
-+        candidate_mask,
-+        candidate_collision_2d,
-+        candidate_outside_2d,
-+        collision_valid,
-+        collision_threshold,
-+        outside_threshold,
-+    )
-+
-+    valid_block_mask = effective_mask.any(dim=-1)
-+    if not valid_block_mask.any():
-+        return _empty_output(hidden_states)
-+    if not valid_block_mask.all():
-+        selected_hidden = selected_hidden.reshape(block_count, 4, -1)[
-+            valid_block_mask
-+        ].reshape(-1, hidden_states.shape[-1])
-+        candidates = candidates[valid_block_mask]
-+        effective_mask = effective_mask[valid_block_mask]
-+        image_size = image_size[valid_block_mask]
-+        block_count = int(valid_block_mask.sum().item())
-+
-+    block_hidden = selected_hidden.reshape(block_count, 4, -1)
-+    if lm_head is None:
-+        logits = torch.einsum(
-+            "bph,vh->bpv",
-+            block_hidden.to(dtype=lm_head_weight.dtype),
-+            lm_head_weight,
-+        )
-+    else:
-+        # Calling the module, rather than F.linear on its weight, applies the
-+        # exact grasp-token output hook used by generation at every slot.
-+        logits = lm_head(block_hidden.to(dtype=lm_head_weight.dtype))
-+    logits = logits.float()
-+    log_probs = F.log_softmax(logits, dim=-1)
-+
-+    target_ids = candidates + coord_start_token_id
-+    expanded_log_probs = log_probs.unsqueeze(1).expand(
-+        -1, candidates.shape[1], -1, -1
-+    )
-+    identity_log_probs = expanded_log_probs.gather(
-+        -1, target_ids.unsqueeze(-1)
-+    ).squeeze(-1)
-+    swapped_ids = target_ids[..., [2, 3, 0, 1]]
-+    swapped_log_probs = expanded_log_probs.gather(
-+        -1, swapped_ids.unsqueeze(-1)
-+    ).squeeze(-1)
-+    identity_loss = -identity_log_probs.mean(dim=-1)
-+    swapped_loss = -swapped_log_probs.mean(dim=-1)
-+    candidate_orientation_loss = torch.stack(
-+        (identity_loss, swapped_loss), dim=-1
-+    )
-+    candidate_orientation_loss = candidate_orientation_loss.masked_fill(
-+        ~effective_mask.unsqueeze(-1), torch.inf
-+    )
-+    pair_per_block, flat_best_index = candidate_orientation_loss.flatten(1).min(
-+        dim=-1
-+    )
-+    if not torch.isfinite(pair_per_block).all():
-+        raise FloatingPointError("non-finite contact pair loss")
-+    best_candidate_index = torch.div(
-+        flat_best_index, 2, rounding_mode="floor"
-+    )
-+    batch_index = torch.arange(block_count, device=hidden_states.device)
-+    best_target = candidates[batch_index, best_candidate_index].float()
-+
-+    coord_probs = log_probs[
-+        ..., coord_start_token_id : coord_end_token_id + 1
-+    ].exp()
-+    coord_mass = coord_probs.sum(dim=-1)
-+    conditional_coord_probs = coord_probs / coord_mass.unsqueeze(-1).clamp_min(1e-12)
-+    coordinate_values = torch.arange(
-+        1001, device=hidden_states.device, dtype=torch.float32
-+    )
-+    soft_coordinates = (
-+        conditional_coord_probs * coordinate_values.view(1, 1, -1)
-+    ).sum(dim=-1)
-+    coord_entropy = -(
-+        conditional_coord_probs
-+        * conditional_coord_probs.clamp_min(1e-12).log()
-+    ).sum(dim=-1) / math.log(1001.0)
-+
-+    widths_heights = image_size[:, [0, 1, 0, 1]]
-+    predicted_pixels = soft_coordinates * widths_heights / 1000.0
-+    target_pixels = best_target * widths_heights / 1000.0
-+    image_diagonal = torch.linalg.vector_norm(image_size, dim=-1).clamp_min(1e-6)
-+
-+    predicted_center = 0.5 * (
-+        predicted_pixels[:, :2] + predicted_pixels[:, 2:]
-+    )
-+    target_center = 0.5 * (target_pixels[:, :2] + target_pixels[:, 2:])
-+    # Apply SmoothL1 in pixel space, then normalize the resulting loss.  Doing
-+    # the normalization first puts ordinary errors inside SmoothL1's quadratic
-+    # region and shrinks useful geometry gradients by another diagonal factor.
-+    center_per_block = F.smooth_l1_loss(
-+        predicted_center,
-+        target_center,
-+        reduction="none",
-+    ).mean(dim=-1) / image_diagonal
-+
-+    predicted_vector = predicted_pixels[:, 2:] - predicted_pixels[:, :2]
-+    target_vector = target_pixels[:, 2:] - target_pixels[:, :2]
-+    predicted_width = torch.linalg.vector_norm(predicted_vector, dim=-1)
-+    target_width = torch.linalg.vector_norm(target_vector, dim=-1)
-+    width_per_block = F.smooth_l1_loss(
-+        predicted_width,
-+        target_width,
-+        reduction="none",
-+    ) / image_diagonal
-+    cosine = (predicted_vector * target_vector).sum(dim=-1) / (
-+        predicted_width.clamp_min(1e-6) * target_width.clamp_min(1e-6)
-+    )
-+    angle_per_block = pi_periodic_angle_loss(cosine)
-+
-+    confidence_gate = (
-+        (coord_mass.min(dim=-1).values >= coord_mass_threshold)
-+        & (coord_entropy.max(dim=-1).values <= coord_entropy_threshold)
-+    ).detach()
-+    valid_angle = (
-+        confidence_gate
-+        & (predicted_width / image_diagonal >= minimum_width_diagonal)
-+        & (target_width / image_diagonal >= minimum_width_diagonal)
-+    ).detach()
-+    confidence = confidence_gate.float()
-+    angle_gate = valid_angle.float()
-+    output = ContactLossOutput(
-+        pair_sum=pair_per_block.sum(),
-+        center_sum=(center_per_block * confidence).sum(),
-+        angle_sum=(angle_per_block * angle_gate).sum(),
-+        width_sum=(width_per_block * confidence).sum(),
-+        contact_count=confidence.new_tensor(float(block_count)),
-+        geometry_active_count=confidence.sum().detach(),
-+        coord_mass_min=coord_mass.min().detach(),
-+        coord_entropy_max=coord_entropy.max().detach(),
-+    )
-+    for name in ("pair_sum", "center_sum", "angle_sum", "width_sum"):
-+        if not torch.isfinite(getattr(output, name)):
-+            raise FloatingPointError(f"non-finite contact loss component: {name}")
-+    return output
-diff --git a/Embodied/eaglevl/train/grasp_rect.py b/Embodied/eaglevl/train/grasp_rect.py
-new file mode 100644
-index 0000000..1d22223
---- /dev/null
-+++ b/Embodied/eaglevl/train/grasp_rect.py
-@@ -0,0 +1,291 @@
-+"""Loss utilities for direct rectangular-grasp PBD training."""
-+
-+from __future__ import annotations
-+
-+import math
-+from dataclasses import dataclass
-+
-+import torch
-+import torch.nn.functional as F
-+from eaglevl.train.grasp_contact import validate_coordinate_token_range
-+
-+
-+@dataclass
-+class GraspRectLossOutput:
-+    pose_sum: torch.Tensor
-+    center_sum: torch.Tensor
-+    angle_sum: torch.Tensor
-+    width_sum: torch.Tensor
-+    grasp_count: torch.Tensor
-+    geometry_active_count: torch.Tensor
-+    coord_mass_min: torch.Tensor
-+    coord_entropy_max: torch.Tensor
-+    angle_resultant_min: torch.Tensor
-+    cx_top1_correct: torch.Tensor
-+    cy_top1_correct: torch.Tensor
-+    theta_exact_top1_correct: torch.Tensor
-+    theta_circular_within1_correct: torch.Tensor
-+    width_top1_correct: torch.Tensor
-+    pose_four_slot_top1_correct: torch.Tensor
-+
-+
-+def circular_angle_neighbors(
-+    target_bins: torch.Tensor,
-+    radius: int,
-+    bin_count: int = 1001,
-+) -> torch.Tensor:
-+    radius = int(radius)
-+    if radius < 0:
-+        raise ValueError("angle wrap radius must be non-negative")
-+    if bin_count <= 0:
-+        raise ValueError("angle bin count must be positive")
-+    offsets = torch.arange(
-+        -radius,
-+        radius + 1,
-+        device=target_bins.device,
-+        dtype=target_bins.dtype,
-+    )
-+    return torch.remainder(target_bins.unsqueeze(-1) + offsets, bin_count)
-+
-+
-+def wrapped_angle_marginal_nll(
-+    full_log_probs: torch.Tensor,
-+    target_bins: torch.Tensor,
-+    *,
-+    coord_start_token_id: int,
-+    radius: int = 1,
-+    bin_count: int = 1001,
-+) -> torch.Tensor:
-+    """Marginalize one circular quantization neighborhood in full vocabulary."""
-+    if full_log_probs.shape[:-1] != target_bins.shape:
-+        raise ValueError(
-+            "angle log-prob and target shapes must align: "
-+            f"log_probs={tuple(full_log_probs.shape)}, "
-+            f"targets={tuple(target_bins.shape)}"
-+        )
-+    if (target_bins < 0).any() or (target_bins >= bin_count).any():
-+        raise ValueError("angle target bins are outside the circular vocabulary")
-+    neighbors = circular_angle_neighbors(target_bins.long(), radius, bin_count)
-+    token_ids = neighbors + int(coord_start_token_id)
-+    if token_ids.max() >= full_log_probs.shape[-1]:
-+        raise ValueError("angle coordinate token IDs exceed full vocabulary")
-+    neighbor_log_probs = full_log_probs.gather(-1, token_ids)
-+    return -torch.logsumexp(neighbor_log_probs, dim=-1)
-+
-+
-+def double_angle_distribution(
-+    conditional_angle_probs: torch.Tensor,
-+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-+    if conditional_angle_probs.shape[-1] != 1001:
-+        raise ValueError("double-angle distribution requires 1001 angle bins")
-+    bins = torch.arange(
-+        1001,
-+        device=conditional_angle_probs.device,
-+        dtype=torch.float32,
-+    )
-+    phase = 2.0 * math.pi * bins / 1001.0
-+    cosine = (conditional_angle_probs.float() * phase.cos()).sum(dim=-1)
-+    sine = (conditional_angle_probs.float() * phase.sin()).sum(dim=-1)
-+    resultant = torch.sqrt(cosine.square() + sine.square())
-+    return cosine, sine, resultant
-+
-+
-+def double_angle_loss(
-+    conditional_angle_probs: torch.Tensor,
-+    target_bins: torch.Tensor,
-+) -> tuple[torch.Tensor, torch.Tensor]:
-+    cosine, sine, resultant = double_angle_distribution(
-+        conditional_angle_probs
-+    )
-+    target_phase = 2.0 * math.pi * target_bins.float() / 1001.0
-+    alignment = (
-+        cosine * target_phase.cos() + sine * target_phase.sin()
-+    ) / resultant.clamp_min(1e-8)
-+    return 1.0 - alignment.clamp(-1.0, 1.0), resultant
-+
-+
-+def _empty_output(hidden_states: torch.Tensor) -> GraspRectLossOutput:
-+    zero = hidden_states.sum() * 0.0
-+    scalar_zero = zero.detach().new_zeros(())
-+    return GraspRectLossOutput(
-+        pose_sum=zero,
-+        center_sum=zero,
-+        angle_sum=zero,
-+        width_sum=zero,
-+        grasp_count=scalar_zero,
-+        geometry_active_count=scalar_zero,
-+        coord_mass_min=scalar_zero.new_ones(()),
-+        coord_entropy_max=scalar_zero,
-+        angle_resultant_min=scalar_zero.new_ones(()),
-+        cx_top1_correct=scalar_zero,
-+        cy_top1_correct=scalar_zero,
-+        theta_exact_top1_correct=scalar_zero,
-+        theta_circular_within1_correct=scalar_zero,
-+        width_top1_correct=scalar_zero,
-+        pose_four_slot_top1_correct=scalar_zero,
-+    )
-+
-+
-+def compute_grasp_rect_auxiliary_losses(
-+    *,
-+    hidden_states: torch.Tensor,
-+    lm_head_weight: torch.Tensor,
-+    grasp_rect_mtp_coord_mask: torch.Tensor,
-+    grasp_rect_candidates: torch.Tensor,
-+    grasp_rect_candidate_mask: torch.Tensor,
-+    grasp_rect_positive_mask: torch.Tensor,
-+    grasp_rect_image_size: torch.Tensor,
-+    coord_start_token_id: int,
-+    coord_end_token_id: int,
-+    lm_head: torch.nn.Module | None = None,
-+    angle_wrap_radius: int = 1,
-+    coord_mass_threshold: float = 0.35,
-+    coord_entropy_threshold: float = 0.85,
-+    angle_resultant_threshold: float = 0.05,
-+    minimum_width_diagonal: float = 1e-4,
-+) -> GraspRectLossOutput:
-+    validate_coordinate_token_range(coord_start_token_id, coord_end_token_id)
-+    if grasp_rect_mtp_coord_mask.shape != hidden_states.shape[:2]:
-+        raise ValueError("grasp rect coordinate mask must match hidden sequence")
-+
-+    shift_mask = grasp_rect_mtp_coord_mask[..., 1:].bool().reshape(-1)
-+    selected_hidden = hidden_states[..., :-1, :].reshape(
-+        -1, hidden_states.shape[-1]
-+    )[shift_mask]
-+    if selected_hidden.numel() == 0:
-+        if grasp_rect_positive_mask.bool().any():
-+            raise ValueError("positive grasp rect sample has no four-slot MTP block")
-+        return _empty_output(hidden_states)
-+    if selected_hidden.shape[0] % 4 != 0:
-+        raise ValueError("grasp rect coordinate mask must select four-slot blocks")
-+
-+    block_count = selected_hidden.shape[0] // 4
-+    positive_indices = (
-+        grasp_rect_positive_mask.bool().nonzero(as_tuple=False).flatten()
-+    )
-+    if positive_indices.numel() != block_count:
-+        raise ValueError("positive sample/grasp rect block count mismatch")
-+    candidates = grasp_rect_candidates[positive_indices].long()
-+    candidate_mask = grasp_rect_candidate_mask[positive_indices].bool()
-+    image_size = grasp_rect_image_size[positive_indices].float()
-+    if candidates.ndim != 3 or candidates.shape[-1] != 4:
-+        raise ValueError("grasp_rect_candidates must have shape [samples, K, 4]")
-+    if not candidate_mask.any(dim=-1).all():
-+        raise ValueError("every positive grasp rect sample needs a candidate")
-+    if (candidates[candidate_mask] < 0).any() or (
-+        candidates[candidate_mask] > 1000
-+    ).any():
-+        raise ValueError("grasp rect candidate values must be in [0, 1000]")
-+    if (
-+        candidates[..., 3][candidate_mask].float() / 1000.0
-+        <= float(minimum_width_diagonal)
-+    ).any():
-+        raise ValueError("grasp rect candidate width must exceed minimum")
-+    if (image_size <= 0).any() or not torch.isfinite(image_size).all():
-+        raise ValueError("positive grasp rect samples need positive image sizes")
-+
-+    block_hidden = selected_hidden.reshape(block_count, 4, -1)
-+    if lm_head is None:
-+        logits = torch.einsum(
-+            "bph,vh->bpv",
-+            block_hidden.to(dtype=lm_head_weight.dtype),
-+            lm_head_weight,
-+        )
-+    else:
-+        logits = lm_head(block_hidden.to(dtype=lm_head_weight.dtype))
-+    log_probs = F.log_softmax(logits.float(), dim=-1)
-+
-+    expanded_log_probs = log_probs.unsqueeze(1).expand(
-+        -1, candidates.shape[1], -1, -1
-+    )
-+    coordinate_target_ids = candidates + coord_start_token_id
-+    standard_log_probs = expanded_log_probs.gather(
-+        -1, coordinate_target_ids.unsqueeze(-1)
-+    ).squeeze(-1)
-+    angle_log_probs = wrapped_angle_marginal_nll(
-+        expanded_log_probs[:, :, 2, :],
-+        candidates[:, :, 2],
-+        coord_start_token_id=coord_start_token_id,
-+        radius=angle_wrap_radius,
-+    )
-+    slot_losses = -standard_log_probs
-+    slot_losses[..., 2] = angle_log_probs
-+    candidate_losses = slot_losses.mean(dim=-1).masked_fill(
-+        ~candidate_mask, torch.inf
-+    )
-+    pose_per_block, best_candidate_index = candidate_losses.min(dim=-1)
-+    if not torch.isfinite(pose_per_block).all():
-+        raise FloatingPointError("non-finite grasp rect pose loss")
-+    batch_indices = torch.arange(block_count, device=hidden_states.device)
-+    best_target = candidates[batch_indices, best_candidate_index].float()
-+
-+    coord_probs = log_probs[
-+        ..., coord_start_token_id : coord_end_token_id + 1
-+    ].exp()
-+    coord_mass = coord_probs.sum(dim=-1)
-+    conditional_probs = coord_probs / coord_mass.unsqueeze(-1).clamp_min(1e-12)
-+    predicted_bins = conditional_probs.argmax(dim=-1)
-+    target_bins = best_target.long()
-+    exact_slots = predicted_bins.eq(target_bins)
-+    theta_neighbors = circular_angle_neighbors(target_bins[:, 2], radius=1)
-+    theta_within1 = predicted_bins[:, 2].unsqueeze(-1).eq(
-+        theta_neighbors
-+    ).any(dim=-1)
-+    coordinate_values = torch.arange(
-+        1001, device=hidden_states.device, dtype=torch.float32
-+    )
-+    linear_soft_values = (
-+        conditional_probs * coordinate_values.view(1, 1, -1)
-+    ).sum(dim=-1)
-+    coord_entropy = -(
-+        conditional_probs * conditional_probs.clamp_min(1e-12).log()
-+    ).sum(dim=-1) / math.log(1001.0)
-+
-+    image_diagonal = torch.linalg.vector_norm(image_size, dim=-1).clamp_min(1e-6)
-+    predicted_center = linear_soft_values[:, :2] * image_size / 1000.0
-+    target_center = best_target[:, :2] * image_size / 1000.0
-+    center_per_block = F.smooth_l1_loss(
-+        predicted_center, target_center, reduction="none"
-+    ).mean(dim=-1) / image_diagonal
-+    predicted_width = linear_soft_values[:, 3] * image_diagonal / 1000.0
-+    target_width = best_target[:, 3] * image_diagonal / 1000.0
-+    width_per_block = F.smooth_l1_loss(
-+        predicted_width, target_width, reduction="none"
-+    ) / image_diagonal
-+    angle_per_block, angle_resultant = double_angle_loss(
-+        conditional_probs[:, 2, :], best_target[:, 2]
-+    )
-+
-+    confidence_gate = (
-+        (coord_mass.min(dim=-1).values >= coord_mass_threshold)
-+        & (coord_entropy.max(dim=-1).values <= coord_entropy_threshold)
-+        & (angle_resultant >= angle_resultant_threshold)
-+    ).detach()
-+    valid_angle = (
-+        confidence_gate
-+        & (predicted_width / image_diagonal > minimum_width_diagonal)
-+        & (target_width / image_diagonal > minimum_width_diagonal)
-+    ).detach()
-+    confidence = confidence_gate.float()
-+    angle_gate = valid_angle.float()
-+    output = GraspRectLossOutput(
-+        pose_sum=pose_per_block.sum(),
-+        center_sum=(center_per_block * confidence).sum(),
-+        angle_sum=(angle_per_block * angle_gate).sum(),
-+        width_sum=(width_per_block * confidence).sum(),
-+        grasp_count=confidence.new_tensor(float(block_count)),
-+        geometry_active_count=confidence.sum().detach(),
-+        coord_mass_min=coord_mass.min().detach(),
-+        coord_entropy_max=coord_entropy.max().detach(),
-+        angle_resultant_min=angle_resultant.min().detach(),
-+        cx_top1_correct=exact_slots[:, 0].sum().detach(),
-+        cy_top1_correct=exact_slots[:, 1].sum().detach(),
-+        theta_exact_top1_correct=exact_slots[:, 2].sum().detach(),
-+        theta_circular_within1_correct=theta_within1.sum().detach(),
-+        width_top1_correct=exact_slots[:, 3].sum().detach(),
-+        pose_four_slot_top1_correct=exact_slots.all(dim=-1).sum().detach(),
-+    )
-+    for name in ("pose_sum", "center_sum", "angle_sum", "width_sum"):
-+        if not torch.isfinite(getattr(output, name)):
-+            raise FloatingPointError(f"non-finite grasp rect loss: {name}")
-+    return output
 diff --git a/Embodied/eaglevl/train/locany_finetune_magi_stream.py b/Embodied/eaglevl/train/locany_finetune_magi_stream.py
-index 077c5b8..3057ace 100644
+index 077c5b832a842aad9c37c42d23de221720ccdb75..742aa897af1523149a348466521bdfe3e92ea576 100644
 --- a/Embodied/eaglevl/train/locany_finetune_magi_stream.py
 +++ b/Embodied/eaglevl/train/locany_finetune_magi_stream.py
 @@ -13,6 +13,7 @@ Key Features:
@@ -3420,7 +2495,7 @@ index 077c5b8..3057ace 100644
              
              torch.save(ds_state, temp_path)
              os.replace(temp_path, state_path)
-@@ -1136,6 +2029,489 @@ class StreamPackingMTPTrainer(Trainer):
+@@ -1136,6 +2029,501 @@ class StreamPackingMTPTrainer(Trainer):
          self._total_samples = 0
          self._sample_log_interval = sample_log_interval
          self._start_step = None  # 记录开始的step，用于resume时正确计算平均值
@@ -3434,6 +2509,32 @@ index 077c5b8..3057ace 100644
 +        self._grasp_rect_metric_window = None
 +        self._loss_breakdown_window = {}
 +        self._loss_breakdown_steps = set()
++
++    @staticmethod
++    def _task_mode(config) -> str:
++        if bool(getattr(config, 'joint_task_enabled', False)):
++            return 'joint'
++        if bool(getattr(config, 'grasp_rect_task_enabled', False)):
++            return 'grasp_rect'
++        return 'grasp_contact'
++
++    @staticmethod
++    def _geometry_weight_names(task_mode: str) -> tuple[str, ...]:
++        contact_names = (
++            'contact_center_weight',
++            'contact_angle_weight',
++            'contact_width_weight',
++        )
++        rect_names = (
++            'grasp_rect_center_weight',
++            'grasp_rect_angle_weight',
++            'grasp_rect_width_weight',
++        )
++        if task_mode == 'joint':
++            return contact_names + rect_names
++        if task_mode == 'grasp_rect':
++            return rect_names
++        return contact_names
 +
 +    def _accumulate_coordinate_metrics(self, breakdown) -> None:
 +        names = (
@@ -3522,6 +2623,8 @@ index 077c5b8..3057ace 100644
 +        if not hasattr(self, 'accelerator') or not hasattr(self, 'model'):
 +            return 'contact'
 +        model = self.accelerator.unwrap_model(self.model)
++        if bool(getattr(model.config, 'joint_task_enabled', False)):
++            return 'joint'
 +        if bool(getattr(model.config, 'grasp_rect_task_enabled', False)):
 +            return 'grasp_rect'
 +        return 'contact'
@@ -3777,14 +2880,12 @@ index 077c5b8..3057ace 100644
 +                self.args.output_dir, f"checkpoint-{self.state.global_step}"
 +            )
 +            config = self.accelerator.unwrap_model(self.model).config
-+            is_grasp_rect = bool(
-+                getattr(config, 'grasp_rect_task_enabled', False)
-+            )
-+            state_filename = (
-+                "grasp_rect_trainer_state.json"
-+                if is_grasp_rect
-+                else "grasp_contact_trainer_state.json"
-+            )
++            task_mode = self._task_mode(config)
++            state_filename = {
++                'joint': 'joint_trainer_state.json',
++                'grasp_rect': 'grasp_rect_trainer_state.json',
++                'grasp_contact': 'grasp_contact_trainer_state.json',
++            }[task_mode]
 +            state_path = os.path.join(checkpoint_dir, state_filename)
 +            with open(state_path, "w", encoding="utf-8") as handle:
 +                json.dump(
@@ -3792,8 +2893,13 @@ index 077c5b8..3057ace 100644
 +                        "seen_contact_blocks": self._seen_contact_blocks,
 +                        "seen_grasp_rect_blocks": self._seen_grasp_rect_blocks,
 +                        "training_phase": os.environ.get(
-+                            "GRASP_RECT_PHASE" if is_grasp_rect else "CONTACT_PHASE"
++                            {
++                                'joint': 'JOINT_PHASE',
++                                'grasp_rect': 'GRASP_RECT_PHASE',
++                                'grasp_contact': 'CONTACT_PHASE',
++                            }[task_mode]
 +                        ),
++                        "task_mode": task_mode,
 +                        "data_fingerprint": getattr(
 +                            self.train_dataset, "data_fingerprint", None
 +                        ),
@@ -3805,14 +2911,12 @@ index 077c5b8..3057ace 100644
 +    def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
 +        super()._load_from_checkpoint(resume_from_checkpoint, model=model)
 +        config = self.accelerator.unwrap_model(self.model).config
-+        is_grasp_rect = bool(
-+            getattr(config, 'grasp_rect_task_enabled', False)
-+        )
-+        state_filename = (
-+            "grasp_rect_trainer_state.json"
-+            if is_grasp_rect
-+            else "grasp_contact_trainer_state.json"
-+        )
++        task_mode = self._task_mode(config)
++        state_filename = {
++            'joint': 'joint_trainer_state.json',
++            'grasp_rect': 'grasp_rect_trainer_state.json',
++            'grasp_contact': 'grasp_contact_trainer_state.json',
++        }[task_mode]
 +        state_path = os.path.join(
 +            resume_from_checkpoint, state_filename
 +        )
@@ -3821,7 +2925,11 @@ index 077c5b8..3057ace 100644
 +                payload = json.load(handle)
 +            saved_phase = payload.get("training_phase")
 +            current_phase = os.environ.get(
-+                "GRASP_RECT_PHASE" if is_grasp_rect else "CONTACT_PHASE"
++                {
++                    'joint': 'JOINT_PHASE',
++                    'grasp_rect': 'GRASP_RECT_PHASE',
++                    'grasp_contact': 'CONTACT_PHASE',
++                }[task_mode]
 +            )
 +            if saved_phase != current_phase:
 +                raise ValueError(
@@ -3840,42 +2948,21 @@ index 077c5b8..3057ace 100644
 +                    previous_config = json.load(handle)
 +                previous_geometry_weight = sum(
 +                    float(previous_config.get(name, 0.0))
-+                    for name in (
-+                        (
-+                            'grasp_rect_center_weight',
-+                            'grasp_rect_angle_weight',
-+                            'grasp_rect_width_weight',
-+                        )
-+                        if is_grasp_rect
-+                        else (
-+                            'contact_center_weight',
-+                            'contact_angle_weight',
-+                            'contact_width_weight',
-+                        )
-+                    )
++                    for name in self._geometry_weight_names(task_mode)
 +                )
 +                current_config = self.accelerator.unwrap_model(self.model).config
 +                current_geometry_weight = sum(
 +                    float(getattr(current_config, name, 0.0))
-+                    for name in (
-+                        (
-+                            'grasp_rect_center_weight',
-+                            'grasp_rect_angle_weight',
-+                            'grasp_rect_width_weight',
-+                        )
-+                        if is_grasp_rect
-+                        else (
-+                            'contact_center_weight',
-+                            'contact_angle_weight',
-+                            'contact_width_weight',
-+                        )
-+                    )
++                    for name in self._geometry_weight_names(task_mode)
 +                )
 +                if previous_geometry_weight == 0.0 and current_geometry_weight > 0.0:
-+                    if is_grasp_rect:
++                    if task_mode == 'grasp_rect':
 +                        self._seen_grasp_rect_blocks = 0
++                    elif task_mode == 'grasp_contact':
++                        self._seen_contact_blocks = 0
 +                    else:
 +                        self._seen_contact_blocks = 0
++                        self._seen_grasp_rect_blocks = 0
 +                    logger.info(
 +                        "Starting a new geometry ramp because the resumed "
 +                        "checkpoint had geometry weights disabled"
@@ -3910,7 +2997,7 @@ index 077c5b8..3057ace 100644
      
      def training_step(self, model, inputs, num_items_in_batch=None):
          # 记录开始的step（用于resume时正确计算平均值）
-@@ -1164,7 +2540,48 @@ class StreamPackingMTPTrainer(Trainer):
+@@ -1164,7 +2552,48 @@ class StreamPackingMTPTrainer(Trainer):
                                 f"Total samples (this run) = {self._total_samples}, "
                                 f"Avg samples/step = {avg_samples_per_step:.2f}")
          
@@ -3960,7 +3047,7 @@ index 077c5b8..3057ace 100644
      
      def get_train_dataloader(self):
          if self.train_dataset is None:
-@@ -1180,7 +2597,7 @@ class StreamPackingMTPTrainer(Trainer):
+@@ -1180,7 +2609,7 @@ class StreamPackingMTPTrainer(Trainer):
          
          dataloader = DataLoader(
              self.train_dataset,
@@ -3969,7 +3056,7 @@ index 077c5b8..3057ace 100644
              num_workers=self.args.dataloader_num_workers,
              collate_fn=collate_fn,
              pin_memory=self.args.dataloader_pin_memory,
-@@ -1212,6 +2629,19 @@ def build_stream_packed_dataset_mtp(
+@@ -1212,6 +2641,19 @@ def build_stream_packed_dataset_mtp(
                  target_fps=data_args.target_fps,
                  max_frames=data_args.max_frames,
                  video_total_pixels=data_args.video_total_pixels,
@@ -3989,7 +3076,7 @@ index 077c5b8..3057ace 100644
              )
              
              if len(ds) == 0:
-@@ -1220,11 +2650,20 @@ def build_stream_packed_dataset_mtp(
+@@ -1220,11 +2662,20 @@ def build_stream_packed_dataset_mtp(
              
              datasets.append(ds)
              
@@ -4013,7 +3100,7 @@ index 077c5b8..3057ace 100644
              
          except Exception as e:
              traceback.print_exc()
-@@ -1251,7 +2690,34 @@ def build_stream_packed_dataset_mtp(
+@@ -1251,7 +2702,34 @@ def build_stream_packed_dataset_mtp(
  
  
  def main():
@@ -4049,13 +3136,21 @@ index 077c5b8..3057ace 100644
      init_dist(launcher=launcher, backend='nccl')
      parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
      
-@@ -1260,6 +2726,28 @@ def main():
+@@ -1260,6 +2738,76 @@ def main():
      else:
          model_args, data_args, training_args = parser.parse_args_into_dataclasses()
  
-+    if model_args.contact_loss_enabled:
++    if model_args.joint_task_enabled and not model_args.grasp_rect_task_enabled:
++        raise ValueError(
++            "joint_task_enabled requires grasp_rect_task_enabled so both "
++            "structured task adapters can be registered"
++        )
++
++    if model_args.contact_loss_enabled or model_args.grasp_rect_loss_enabled:
 +        if model_args.block_size != 6:
-+            raise ValueError("contact_loss_enabled requires --block_size 6")
++            raise ValueError("structured grasp losses require --block_size 6")
++
++    if model_args.contact_loss_enabled:
 +        if model_args.contact_geometry_start_blocks < 0:
 +            raise ValueError("contact_geometry_start_blocks must be non-negative")
 +        if model_args.contact_geometry_ramp_blocks <= 0:
@@ -4075,10 +3170,50 @@ index 077c5b8..3057ace 100644
 +            )
 +            training_args.average_tokens_across_devices = True
 +
++    if model_args.grasp_rect_loss_enabled:
++        if model_args.grasp_rect_angle_wrap_radius < 0:
++            raise ValueError("grasp_rect_angle_wrap_radius must be non-negative")
++        if model_args.grasp_rect_geometry_start_blocks < 0:
++            raise ValueError(
++                "grasp_rect_geometry_start_blocks must be non-negative"
++            )
++        if model_args.grasp_rect_geometry_ramp_blocks <= 0:
++            raise ValueError("grasp_rect_geometry_ramp_blocks must be positive")
++        for name, value in (
++            (
++                'grasp_rect_coord_mass_threshold',
++                model_args.grasp_rect_coord_mass_threshold,
++            ),
++            (
++                'grasp_rect_coord_entropy_threshold',
++                model_args.grasp_rect_coord_entropy_threshold,
++            ),
++            (
++                'grasp_rect_angle_resultant_threshold',
++                model_args.grasp_rect_angle_resultant_threshold,
++            ),
++            (
++                'grasp_rect_collision_threshold',
++                model_args.grasp_rect_collision_threshold,
++            ),
++            (
++                'grasp_rect_outside_threshold',
++                model_args.grasp_rect_outside_threshold,
++            ),
++        ):
++            if not 0.0 <= value <= 1.0:
++                raise ValueError(f"{name} must be in [0, 1]")
++        if not training_args.average_tokens_across_devices:
++            logger.warning(
++                "Enabling average_tokens_across_devices for globally normalized "
++                "grasp-rectangle training"
++            )
++            training_args.average_tokens_across_devices = True
++
      if os.path.exists(osp.join(training_args.output_dir, 'done.txt')):
          logger.info("Training done (done.txt exists), exiting!")
          return
-@@ -1292,12 +2780,27 @@ def main():
+@@ -1292,12 +2840,27 @@ def main():
      )
      logger.info(f'Training parameters: {training_args}')
  
@@ -4112,7 +3247,7 @@ index 077c5b8..3057ace 100644
              
      set_seed(training_args.seed)
      
-@@ -1308,7 +2811,15 @@ def main():
+@@ -1308,7 +2871,15 @@ def main():
          tokenizer_path, add_eos_token=False, trust_remote_code=True, use_fast=False)
      tokenizer.tokenizer_path = tokenizer_path
      tokenizer.model_max_length = data_args.max_seq_length
@@ -4129,7 +3264,7 @@ index 077c5b8..3057ace 100644
      
      if len(tokenizer.encode("assistant")) > 1:
          tokenizer.add_tokens(["assistant"], special_tokens=False)
-@@ -1323,9 +2834,46 @@ def main():
+@@ -1323,9 +2894,47 @@ def main():
      ref_end_token_id = tokenizer.convert_tokens_to_ids(REF_END_TOKEN)
      coord_start_token_id = tokenizer.convert_tokens_to_ids(number_tokens_list[0])
      coord_end_token_id = tokenizer.convert_tokens_to_ids(number_tokens_list[-1])
@@ -4168,6 +3303,7 @@ index 077c5b8..3057ace 100644
 +
 +    from eaglevl.train.grasp_contact import (
 +        activate_task_token_adapter,
++        activate_task_token_adapters,
 +        configure_llm_lora,
 +        initialize_missing_task_adapters,
 +        register_all_task_token_hooks,
@@ -4177,7 +3313,7 @@ index 077c5b8..3057ace 100644
      if model_args.model_name_or_path is not None:
          # ===== LocateAnything (MoonVit + Qwen2/Qwen3) Loading Path =====
          logger.info('Loading LocateAnythingForConditionalGeneration...')
-@@ -1334,9 +2882,9 @@ def main():
+@@ -1334,9 +2943,9 @@ def main():
          config._attn_implementation_autoset = False
          config.text_config._attn_implementation = model_args.attn_implementation
          config.text_config._attn_implementation_autoset = False
@@ -4189,7 +3325,7 @@ index 077c5b8..3057ace 100644
  
          config.image_token_index = image_token_index
          config.text_config.block_size = int(model_args.block_size)
-@@ -1350,11 +2898,68 @@ def main():
+@@ -1350,11 +2959,69 @@ def main():
          config.ref_start_token_id = ref_start_token_id
          config.ref_end_token_id = ref_end_token_id
          config.none_token_id = none_token_id
@@ -4207,6 +3343,7 @@ index 077c5b8..3057ace 100644
 +            config.grasp_rect_start_token_id = grasp_rect_start_token_id
 +            config.grasp_rect_end_token_id = grasp_rect_end_token_id
 +        config.grasp_rect_task_enabled = model_args.grasp_rect_task_enabled
++        config.joint_task_enabled = model_args.joint_task_enabled
 +        config.grasp_rect_loss_enabled = model_args.grasp_rect_loss_enabled
 +        config.grasp_rect_pose_weight = model_args.grasp_rect_pose_weight
 +        config.grasp_rect_center_weight = model_args.grasp_rect_center_weight
@@ -4261,7 +3398,7 @@ index 077c5b8..3057ace 100644
          )
              
          model.text_mask_token_id = text_mask_token_id
-@@ -1379,7 +2984,7 @@ def main():
+@@ -1379,7 +3046,7 @@ def main():
  
          if vision_config.model_type == 'moonvit':
              logger.info('Loading MoonVit...')
@@ -4270,7 +3407,7 @@ index 077c5b8..3057ace 100644
              vision_model = MoonVitPretrainedModel.from_pretrained(
                  model_args.vision_path, torch_dtype=torch.bfloat16, config=vision_config)
          else:
-@@ -1387,7 +2992,7 @@ def main():
+@@ -1387,7 +3054,7 @@ def main():
              
          logger.info('Loading LLM...')
          text_config = AutoConfig.from_pretrained(model_args.llm_path, trust_remote_code=True)
@@ -4279,7 +3416,7 @@ index 077c5b8..3057ace 100644
  
          llm = AutoModelForCausalLM.from_pretrained(
              model_args.llm_path, torch_dtype=torch.bfloat16,
-@@ -1397,7 +3002,86 @@ def main():
+@@ -1397,7 +3064,87 @@ def main():
              vision_config.to_dict(), text_config.to_dict(), 
              image_token_index=image_token_index, 
              mlp_connector_layers=model_args.mlp_connector_layers)
@@ -4310,6 +3447,7 @@ index 077c5b8..3057ace 100644
 +        locateanything_config.grasp_rect_task_enabled = (
 +            model_args.grasp_rect_task_enabled
 +        )
++        locateanything_config.joint_task_enabled = model_args.joint_task_enabled
 +        locateanything_config.grasp_rect_loss_enabled = (
 +            model_args.grasp_rect_loss_enabled
 +        )
@@ -4367,7 +3505,7 @@ index 077c5b8..3057ace 100644
          model = LocateAnythingForConditionalGeneration(locateanything_config, vision_model, llm)
  
          chat_template_data = load_config(model_args.chat_template_path)
-@@ -1406,7 +3090,16 @@ def main():
+@@ -1406,7 +3153,16 @@ def main():
          image_processor = LocateAnythingImageProcessor(**preprocessor_config)
          processor_config["chat_template"] = chat_template_data["chat_template"]
          processor = LocateAnythingProcessor(tokenizer=tokenizer, image_processor=image_processor, **processor_config)
@@ -4385,7 +3523,7 @@ index 077c5b8..3057ace 100644
      model.neftune_alpha = data_args.neftune_alpha
      
      # Enable packing mode for stream packing (works for both pretrained and scratch models)
-@@ -1423,8 +3116,45 @@ def main():
+@@ -1423,8 +3179,45 @@ def main():
          output_embeddings = model.language_model.get_output_embeddings().weight.data
          output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
          output_embeddings[-num_new_tokens:] = output_embeddings_avg
@@ -4431,7 +3569,7 @@ index 077c5b8..3057ace 100644
          dist.barrier()
  
      model.language_model.config.use_cache = False
-@@ -1470,15 +3200,47 @@ def main():
+@@ -1470,15 +3263,59 @@ def main():
          _freeze_params(model.language_model)
  
      if model_args.unfreeze_lm_head:
@@ -4461,7 +3599,19 @@ index 077c5b8..3057ace 100644
 +            model_args.use_llm_lora,
 +        )
 +
-+    if model_args.grasp_rect_task_enabled:
++    if model_args.joint_task_enabled:
++        task_token_parameters = activate_task_token_adapters(
++            model,
++            [
++                ("grasp_contact", [grasp_start_token_id, grasp_end_token_id]),
++                (
++                    "grasp_rect",
++                    [grasp_rect_start_token_id, grasp_rect_end_token_id],
++                ),
++            ],
++        )
++        task_name = "joint"
++    elif model_args.grasp_rect_task_enabled:
 +        task_token_parameters = activate_task_token_adapter(
 +            model,
 +            "grasp_rect",
@@ -4483,7 +3633,7 @@ index 077c5b8..3057ace 100644
  
      if model_args.freeze_mlp:
          _freeze_params(model.mlp1)
-@@ -1544,7 +3306,7 @@ def main():
+@@ -1544,7 +3381,7 @@ def main():
  
      # Training
      if training_args.do_train:
@@ -4492,7 +3642,7 @@ index 077c5b8..3057ace 100644
          
          if checkpoint is not None:
              training_args.ignore_data_skip = True
-@@ -1554,49 +3316,27 @@ def main():
+@@ -1554,49 +3391,27 @@ def main():
              dataloader_state_path = os.path.join(checkpoint, f"dataloader_state_rank{rank}.pt")
              
              if os.path.exists(dataloader_state_path):
@@ -4557,7 +3707,7 @@ index 077c5b8..3057ace 100644
          metrics = train_result.metrics
          metrics['train_samples'] = 'streaming'
 diff --git a/Embodied/eaglevl/utils/locany/attn_mask_utils.py b/Embodied/eaglevl/utils/locany/attn_mask_utils.py
-index c75071a..1b0a4a9 100644
+index c75071a96f729a01c9ffbee0f3d894a2c1ae94ad..1b0a4a9f2ee43c3edf31519d4eda9d47af8e82b6 100644
 --- a/Embodied/eaglevl/utils/locany/attn_mask_utils.py
 +++ b/Embodied/eaglevl/utils/locany/attn_mask_utils.py
 @@ -177,6 +177,9 @@ def create_block_diff_mask_by_pe_4d(
@@ -4571,7 +3721,7 @@ index c75071a..1b0a4a9 100644
      customized_mask.masked_fill_(final_mask, 0.0)
  
 diff --git a/Embodied/eaglevl/utils/locany/configuration_locateanything.py b/Embodied/eaglevl/utils/locany/configuration_locateanything.py
-index 8d83715..773fc03 100644
+index 8d8371557b85aafa0a39f7066831838be51988cc..773fc03988634a3b220466d85005a6102cfc798a 100644
 --- a/Embodied/eaglevl/utils/locany/configuration_locateanything.py
 +++ b/Embodied/eaglevl/utils/locany/configuration_locateanything.py
 @@ -50,6 +50,7 @@ class LocateAnythingConfig(PretrainedConfig):
@@ -4599,7 +3749,7 @@ index 8d83715..773fc03 100644
          output['downsample_ratio'] = self.downsample_ratio
          output['template'] = self.template
 diff --git a/Embodied/eaglevl/utils/locany/generate_utils.py b/Embodied/eaglevl/utils/locany/generate_utils.py
-index 4b40743..3682eff 100644
+index 4b40743676ccbe2645a576dfb852e4ec8c45486d..3682eff833759f88c1ceede3501e70a6bc3dacda 100644
 --- a/Embodied/eaglevl/utils/locany/generate_utils.py
 +++ b/Embodied/eaglevl/utils/locany/generate_utils.py
 @@ -26,6 +26,18 @@ def get_token_ids_from_config(config) -> Dict[str, int]:
@@ -5187,49 +4337,8 @@ index 4b40743..3682eff 100644
 -        }
 \ No newline at end of file
 +        }
-diff --git a/Embodied/eaglevl/utils/locany/grasp_adapter_utils.py b/Embodied/eaglevl/utils/locany/grasp_adapter_utils.py
-new file mode 100644
-index 0000000..cb6c74e
---- /dev/null
-+++ b/Embodied/eaglevl/utils/locany/grasp_adapter_utils.py
-@@ -0,0 +1,35 @@
-+"""Shared grasp task-token adapter operations for training and inference."""
-+
-+from __future__ import annotations
-+
-+import torch
-+import torch.nn.functional as F
-+
-+
-+def apply_grasp_task_output_delta(
-+    hidden_states: torch.Tensor,
-+    logits: torch.Tensor,
-+    task_token_ids: torch.Tensor,
-+    output_delta: torch.Tensor,
-+) -> torch.Tensor:
-+    """Apply the compact grasp-token output adapter to every logit row."""
-+    if hidden_states.shape[:-1] != logits.shape[:-1]:
-+        raise ValueError(
-+            "hidden-state/logit leading dimensions differ: "
-+            f"hidden={tuple(hidden_states.shape)}, logits={tuple(logits.shape)}"
-+        )
-+    if output_delta.ndim != 2 or output_delta.shape[1] != hidden_states.shape[-1]:
-+        raise ValueError(
-+            "grasp output adapter has incompatible shape: "
-+            f"delta={tuple(output_delta.shape)}, hidden={tuple(hidden_states.shape)}"
-+        )
-+    task_token_ids = task_token_ids.to(device=logits.device, dtype=torch.long)
-+    if task_token_ids.numel() != output_delta.shape[0]:
-+        raise ValueError(
-+            "grasp task-token IDs and output-adapter rows differ: "
-+            f"tokens={task_token_ids.numel()}, rows={output_delta.shape[0]}"
-+        )
-+    correction = F.linear(
-+        hidden_states.to(dtype=output_delta.dtype), output_delta
-+    ).to(dtype=logits.dtype)
-+    return logits.index_add(-1, task_token_ids, correction)
 diff --git a/Embodied/eaglevl/utils/locany/modeling_locateanything.py b/Embodied/eaglevl/utils/locany/modeling_locateanything.py
-index 5dad399..aeb3a55 100644
+index 5dad399f3c6aa2ce07901990ab7c46bdf27c9693..fd5ea50024858fab98a2cd56e1eaf82da31c7031 100644
 --- a/Embodied/eaglevl/utils/locany/modeling_locateanything.py
 +++ b/Embodied/eaglevl/utils/locany/modeling_locateanything.py
 @@ -10,12 +10,13 @@ from typing import List, Optional, Tuple, Union
@@ -5478,7 +4587,7 @@ index 5dad399..aeb3a55 100644
          start_time = time.time()
          prefill_time = None
  
-@@ -353,6 +520,31 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
+@@ -353,6 +523,31 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
          generation_mode = generate_kwargs.get('generation_mode', 'hybrid')
          assert generation_mode in ('fast', 'slow', 'hybrid'), \
              f"Unsupported generation_mode='{generation_mode}'. Use 'fast', 'slow', or 'hybrid'."
@@ -5510,7 +4619,7 @@ index 5dad399..aeb3a55 100644
  
          sampling_history = []
  
-@@ -415,14 +607,32 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
+@@ -415,14 +610,32 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
          def _sample_token_in_mtp(generated, outputs):
              """Sample tokens using MTP (Multi-Token Prediction) mode."""
              next_token_logits = outputs.logits[:, -n_future_tokens:, :]
@@ -5545,7 +4654,7 @@ index 5dad399..aeb3a55 100644
              out_type = out_pattern['type']
              out_token = torch.tensor(out_pattern['tokens'], dtype=x0.dtype, device=x0.device)
  
-@@ -432,7 +642,20 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
+@@ -432,7 +645,20 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
          def _sample_token_in_ar(generated, outputs):
              """Sample a single token using AR (Auto-Regressive) mode."""
              next_token_logits = outputs.logits[:, -1:, :]
@@ -5567,7 +4676,7 @@ index 5dad399..aeb3a55 100644
                  next_token_logits, generated, self.token_ids, **generate_kwargs
              )
  
-@@ -440,7 +663,16 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
+@@ -440,7 +666,16 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
              out_type = 'continue_ar'
              token_val = out_token[0].item()
  
@@ -5585,7 +4694,7 @@ index 5dad399..aeb3a55 100644
              coord_start_token_id = self.token_ids['coord_start_token_id']
              coord_end_token_id = self.token_ids['coord_end_token_id']
              none_token_id = self.token_ids['none_token_id']
-@@ -499,7 +731,11 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
+@@ -499,7 +734,11 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
              generated = torch.cat([generated, out_token.unsqueeze(0)], dim=1)
  
              # Step 4: Mode switching & termination
@@ -5631,7 +4740,7 @@ index 5dad399..aeb3a55 100644
 +            return response[0], generation_stats
          return response[0]
 diff --git a/Embodied/eaglevl/utils/locany/modeling_vit.py b/Embodied/eaglevl/utils/locany/modeling_vit.py
-index cc6b383..a7615cf 100644
+index cc6b38328207b2232a97478914c72154336f5027..a7615cf8f555de5d16c042429884a6a2654b9cfe 100644
 --- a/Embodied/eaglevl/utils/locany/modeling_vit.py
 +++ b/Embodied/eaglevl/utils/locany/modeling_vit.py
 @@ -596,6 +596,10 @@ class MoonVitPretrainedModel(PreTrainedModel):
@@ -5645,3 +4754,997 @@ index cc6b383..a7615cf 100644
      def forward(
          self, pixel_values: torch.Tensor, grid_hws: torch.Tensor
      ) -> torch.Tensor:
+diff --git a/Embodied/deepspeed_configs/zero_stage2_torch_adam_config.json b/Embodied/deepspeed_configs/zero_stage2_torch_adam_config.json
+new file mode 100644
+index 0000000..54de9ae
+--- /dev/null
++++ b/Embodied/deepspeed_configs/zero_stage2_torch_adam_config.json
+@@ -0,0 +1,40 @@
++{
++  "zero_optimization": {
++    "stage": 2,
++    "allgather_partitions": true,
++    "allgather_bucket_size": 100000000,
++    "overlap_comm": true,
++    "reduce_scatter": true,
++    "reduce_bucket_size": 100000000,
++    "contiguous_gradients": true
++  },
++  "fp16": {
++    "enabled": "auto",
++    "auto_cast": true,
++    "loss_scale": 0,
++    "initial_scale_power": 32,
++    "loss_scale_window": 1000,
++    "hysteresis": 2,
++    "min_loss_scale": 1
++  },
++  "bf16": {
++    "enabled": "auto"
++  },
++  "optimizer": {
++    "type": "AdamW",
++    "params": {
++      "lr": "auto",
++      "betas": [0.9, 0.999],
++      "eps": 1e-8,
++      "weight_decay": "auto",
++      "torch_adam": true,
++      "adam_w_mode": true
++    }
++  },
++  "gradient_accumulation_steps": "auto",
++  "gradient_clipping": "auto",
++  "steps_per_print": 2000,
++  "train_batch_size": "auto",
++  "train_micro_batch_size_per_gpu": "auto",
++  "wall_clock_breakdown": false
++}
+diff --git a/Embodied/eaglevl/train/grasp_contact.py b/Embodied/eaglevl/train/grasp_contact.py
+new file mode 100644
+index 0000000..3e6b850
+--- /dev/null
++++ b/Embodied/eaglevl/train/grasp_contact.py
+@@ -0,0 +1,604 @@
++"""Loss utilities for joint two-contact-point PBD training."""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++
++import torch
++import torch.nn.functional as F
++
++
++@dataclass
++class ContactLossOutput:
++    pair_sum: torch.Tensor
++    center_sum: torch.Tensor
++    angle_sum: torch.Tensor
++    width_sum: torch.Tensor
++    contact_count: torch.Tensor
++    geometry_active_count: torch.Tensor
++    coord_mass_min: torch.Tensor
++    coord_entropy_max: torch.Tensor
++
++
++def compute_task_adapter_cross_entropy(
++    lm_head: torch.nn.Module,
++    hidden_states: torch.Tensor,
++    labels: torch.Tensor,
++) -> torch.Tensor:
++    """Compute summed CE through the same hooked LM head used by inference."""
++    if hidden_states.ndim != 2 or labels.ndim != 1:
++        raise ValueError(
++            "task-adapter CE expects [tokens, hidden] and [tokens]: "
++            f"hidden={tuple(hidden_states.shape)}, labels={tuple(labels.shape)}"
++        )
++    if hidden_states.shape[0] != labels.shape[0] or labels.numel() == 0:
++        raise ValueError(
++            "task-adapter CE requires one non-empty label per hidden state: "
++            f"hidden={hidden_states.shape[0]}, labels={labels.numel()}"
++        )
++    logits = lm_head(hidden_states)
++    if not torch.isfinite(logits).all():
++        raise FloatingPointError("non-finite logits after grasp output adapter")
++    return F.cross_entropy(logits.float(), labels, reduction="sum")
++
++
++def combine_base_and_pair_ce(
++    base_loss_sum: torch.Tensor,
++    pair_loss_sum: torch.Tensor,
++    global_ce_token_count: torch.Tensor | float | int,
++    pair_weight: float = 1.0,
++) -> torch.Tensor:
++    """Replace four coordinate-token CEs without changing token-level scale.
++
++    ``pair_loss_sum`` contains one four-slot *mean* per contact block.  Convert
++    it back to a token numerator before combining it with the non-coordinate CE
++    numerator.  The denominator must therefore include all valid labels,
++    including the four coordinate slots owned by pair loss.
++    """
++    denominator = torch.as_tensor(
++        global_ce_token_count,
++        device=base_loss_sum.device,
++        dtype=torch.float32,
++    ).clamp_min(1.0)
++    pair_token_sum = 4.0 * pair_loss_sum
++    return (
++        base_loss_sum + float(pair_weight) * pair_token_sum
++    ) / denominator
++
++
++@torch.no_grad()
++def compute_coordinate_token_metrics(
++    lm_head: torch.nn.Module,
++    hidden_states: torch.Tensor,
++    labels: torch.Tensor,
++) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
++    """Measure coordinate-token CE and top-1 accuracy without adding loss."""
++    if hidden_states.ndim != 2 or labels.ndim != 1:
++        raise ValueError(
++            "coordinate metrics expect [tokens, hidden] and [tokens]: "
++            f"hidden={tuple(hidden_states.shape)}, labels={tuple(labels.shape)}"
++        )
++    if hidden_states.shape[0] != labels.shape[0] or labels.numel() == 0:
++        raise ValueError(
++            "coordinate metrics require one non-empty label per hidden state"
++        )
++    logits = lm_head(hidden_states)
++    if not torch.isfinite(logits).all():
++        raise FloatingPointError(
++            "non-finite logits while computing coordinate-token metrics"
++        )
++    logits = logits.float()
++    ce_sum = F.cross_entropy(logits, labels, reduction="sum")
++    correct = logits.argmax(dim=-1).eq(labels).sum()
++    count = labels.new_tensor(labels.numel())
++    return ce_sum.detach(), correct.detach(), count.detach()
++
++
++def configure_llm_lora(model, requested_rank: int) -> bool:
++    """Install LLM LoRA once and keep adapters trainable after base freezing.
++
++    Returns True when a new adapter is installed and False when an adapter from
++    a checkpoint is reused.
++    """
++    requested_rank = int(requested_rank)
++    if requested_rank <= 0:
++        raise ValueError("LLM LoRA rank must be positive")
++
++    configured_rank = int(
++        getattr(model.config, "use_llm_lora", 0) or 0
++    )
++    already_wrapped = bool(getattr(model, "use_llm_lora", False))
++    if already_wrapped:
++        if configured_rank != requested_rank:
++            raise ValueError(
++                "LoRA checkpoint rank does not match requested rank: "
++                f"checkpoint={configured_rank}, requested={requested_rank}"
++            )
++        adapter_parameters = [
++            parameter
++            for name, parameter in model.language_model.named_parameters()
++            if "lora_" in name
++        ]
++        if not adapter_parameters:
++            raise ValueError("model reports LLM LoRA but has no adapter parameters")
++        for parameter in adapter_parameters:
++            parameter.requires_grad = True
++        model.language_model.enable_input_require_grads()
++        return False
++
++    if configured_rank:
++        raise ValueError(
++            "model config requests LLM LoRA but the model is not wrapped: "
++            f"rank={configured_rank}"
++        )
++    model.wrap_llm_lora(
++        r=requested_rank,
++        lora_alpha=2 * requested_rank,
++        lora_dropout=0.05,
++    )
++    model.config.use_llm_lora = requested_rank
++    return True
++
++
++def enable_task_token_training(model, token_ids: list[int]) -> int:
++    """Enable compact grasp-token input/output adapters."""
++    unique_ids = sorted({int(token_id) for token_id in token_ids})
++    if not unique_ids:
++        raise ValueError("task token IDs must not be empty")
++    configured_ids = sorted(
++        int(token_id)
++        for token_id in getattr(model.config, "grasp_task_token_ids", [])
++    )
++    if configured_ids != unique_ids:
++        raise ValueError(
++            "grasp task token IDs differ from the model configuration: "
++            f"configured={configured_ids}, requested={unique_ids}"
++        )
++    input_adapter = getattr(model, "grasp_task_embedding_delta", None)
++    output_adapter = getattr(model, "grasp_task_output_delta", None)
++    if (
++        input_adapter is None
++        or output_adapter is None
++        or input_adapter.shape[0] != len(unique_ids)
++        or output_adapter.shape != input_adapter.shape
++    ):
++        raise ValueError("model has no compatible grasp task embedding adapter")
++    for embedding in (
++        model.language_model.get_input_embeddings(),
++        model.language_model.get_output_embeddings(),
++    ):
++        if embedding.weight.requires_grad:
++            raise ValueError("base embedding/lm_head must remain frozen")
++    input_adapter.requires_grad = True
++    output_adapter.requires_grad = True
++    return model.register_grasp_task_embedding_hook()
++
++
++def enable_grasp_rect_task_token_training(
++    model, token_ids: list[int]
++) -> int:
++    """Enable the independent rectangular-grasp token adapters."""
++    unique_ids = sorted({int(token_id) for token_id in token_ids})
++    configured_ids = sorted(
++        int(token_id)
++        for token_id in getattr(model.config, "grasp_rect_task_token_ids", [])
++    )
++    if configured_ids != unique_ids or not unique_ids:
++        raise ValueError(
++            "grasp rect task token IDs differ from model configuration: "
++            f"configured={configured_ids}, requested={unique_ids}"
++        )
++    input_adapter = getattr(model, "grasp_rect_task_embedding_delta", None)
++    output_adapter = getattr(model, "grasp_rect_task_output_delta", None)
++    if (
++        input_adapter is None
++        or output_adapter is None
++        or input_adapter.shape[0] != len(unique_ids)
++        or output_adapter.shape != input_adapter.shape
++    ):
++        raise ValueError("model has no compatible grasp rect task adapter")
++    for embedding in (
++        model.language_model.get_input_embeddings(),
++        model.language_model.get_output_embeddings(),
++    ):
++        if embedding.weight.requires_grad:
++            raise ValueError("base embedding/lm_head must remain frozen")
++    input_adapter.requires_grad = True
++    output_adapter.requires_grad = True
++    return model.register_grasp_rect_task_embedding_hook()
++
++
++def freeze_task_token_adapters(model) -> int:
++    """Freeze every structured-task delta before enabling one active task."""
++    frozen_parameters = 0
++    for name in (
++        "grasp_task_embedding_delta",
++        "grasp_task_output_delta",
++        "grasp_rect_task_embedding_delta",
++        "grasp_rect_task_output_delta",
++    ):
++        parameter = getattr(model, name, None)
++        if parameter is None:
++            continue
++        parameter.requires_grad = False
++        frozen_parameters += parameter.numel()
++    return frozen_parameters
++
++
++def register_all_task_token_hooks(model) -> int:
++    """Reattach both task hooks after embedding or LM-head replacement."""
++    registered_parameters = 0
++    for method_name in (
++        "register_grasp_task_embedding_hook",
++        "register_grasp_rect_task_embedding_hook",
++    ):
++        method = getattr(model, method_name, None)
++        if method is not None:
++            registered_parameters += int(method())
++    return registered_parameters
++
++
++def activate_task_token_adapter(
++    model, task: str, token_ids: list[int]
++) -> int:
++    """Freeze both adapters, reattach hooks, and enable one task."""
++    return activate_task_token_adapters(model, [(task, token_ids)])
++
++
++def activate_task_token_adapters(
++    model, tasks: list[tuple[str, list[int]]]
++) -> int:
++    """Enable multiple structured-task adapters for joint training."""
++    if not tasks:
++        raise ValueError("at least one structured task adapter is required")
++    freeze_task_token_adapters(model)
++    register_all_task_token_hooks(model)
++    enabled_parameters = 0
++    seen: set[str] = set()
++    for task, token_ids in tasks:
++        if task in seen:
++            raise ValueError(f"duplicate structured task adapter: {task!r}")
++        seen.add(task)
++        if task == "grasp_contact":
++            enabled_parameters += enable_task_token_training(model, token_ids)
++        elif task == "grasp_rect":
++            enabled_parameters += enable_grasp_rect_task_token_training(
++                model, token_ids
++            )
++        else:
++            raise ValueError(f"unsupported structured task adapter: {task!r}")
++    return enabled_parameters
++
++
++def initialize_missing_task_adapters(model, missing_keys: list[str]) -> int:
++    """Zero only task adapters absent from the loaded checkpoint.
++
++    Transformers may run its generic missing-weight initializer after the model
++    constructor, so constructor-level ``torch.zeros`` is not sufficient.  A
++    resumed grasp checkpoint must retain its learned adapter values, however.
++    """
++    missing_names = {
++        key.rsplit(".", 1)[-1]
++        for key in missing_keys
++    }
++    initialized_parameters = 0
++    for name in (
++        "grasp_task_embedding_delta",
++        "grasp_task_output_delta",
++        "grasp_rect_task_embedding_delta",
++        "grasp_rect_task_output_delta",
++    ):
++        parameter = getattr(model, name, None)
++        if parameter is None:
++            continue
++        if name in missing_names:
++            with torch.no_grad():
++                parameter.zero_()
++            initialized_parameters += parameter.numel()
++        if not torch.isfinite(parameter).all():
++            raise FloatingPointError(
++                f"Non-finite values in loaded task adapter: {name}"
++            )
++    return initialized_parameters
++
++
++def validate_coordinate_token_range(start_token_id: int, end_token_id: int) -> None:
++    if end_token_id - start_token_id != 1000:
++        raise ValueError(
++            "contact loss requires exactly 1001 contiguous coordinate tokens; "
++            f"got IDs [{start_token_id}, {end_token_id}]"
++        )
++
++
++def pi_periodic_angle_loss(cosine: torch.Tensor) -> torch.Tensor:
++    """Return a stable, endpoint-exchange-invariant angular loss.
++
++    The forward value is ``1 - |cos(theta)|``.  Expressing the absolute value
++    with an explicit branch gives the ambiguous 90-degree case a deterministic
++    non-zero subgradient.  In contrast, ``1 - cos(theta)^2`` has exactly zero
++    gradient at 90 degrees and cannot recover from that worst-case prediction.
++    """
++    cosine = cosine.clamp(-1.0, 1.0)
++    aligned_cosine = torch.where(cosine >= 0.0, cosine, -cosine)
++    return 1.0 - aligned_cosine
++
++
++def _empty_output(hidden_states: torch.Tensor) -> ContactLossOutput:
++    zero = hidden_states.sum() * 0.0
++    scalar_zero = zero.detach().new_zeros(())
++    return ContactLossOutput(
++        pair_sum=zero,
++        center_sum=zero,
++        angle_sum=zero,
++        width_sum=zero,
++        contact_count=scalar_zero,
++        geometry_active_count=scalar_zero,
++        # Neutral sentinel for a cross-rank MIN reduction when this rank has
++        # no positive contact block.
++        coord_mass_min=scalar_zero.new_ones(()),
++        coord_entropy_max=scalar_zero,
++    )
++
++
++def _filter_colliding_candidates(
++    candidate_mask: torch.Tensor,
++    candidate_collision_2d: torch.Tensor | None,
++    candidate_outside_2d: torch.Tensor | None,
++    collision_valid: torch.Tensor | None,
++    collision_threshold: float,
++    outside_threshold: float,
++) -> torch.Tensor:
++    if candidate_collision_2d is None and candidate_outside_2d is None:
++        return candidate_mask
++
++    safe_candidates = candidate_mask.clone()
++    filterable = torch.zeros(
++        (candidate_mask.shape[0], 1),
++        dtype=torch.bool,
++        device=candidate_mask.device,
++    )
++    if candidate_outside_2d is not None:
++        outside_finite = torch.isfinite(candidate_outside_2d)
++        outside_known = (outside_finite | ~candidate_mask).all(
++            dim=-1, keepdim=True
++        )
++        outside_safe = outside_finite & (
++            candidate_outside_2d <= outside_threshold
++        )
++        safe_candidates &= torch.where(
++            outside_known, outside_safe, candidate_mask
++        )
++        filterable |= outside_known
++
++    if candidate_collision_2d is not None and collision_valid is not None:
++        collision_known = collision_valid.bool().unsqueeze(-1)
++        collision_safe = torch.isfinite(candidate_collision_2d) & (
++            candidate_collision_2d <= collision_threshold
++        )
++        safe_candidates &= torch.where(
++            collision_known, collision_safe, candidate_mask
++        )
++        filterable |= collision_known
++
++    return torch.where(filterable, safe_candidates, candidate_mask)
++
++
++def compute_contact_auxiliary_losses(
++    *,
++    hidden_states: torch.Tensor,
++    lm_head_weight: torch.Tensor,
++    lm_head: torch.nn.Module | None = None,
++    contact_mtp_coord_mask: torch.Tensor,
++    contact_candidates: torch.Tensor,
++    contact_candidate_mask: torch.Tensor,
++    contact_positive_mask: torch.Tensor,
++    contact_image_size: torch.Tensor,
++    coord_start_token_id: int,
++    coord_end_token_id: int,
++    candidate_collision_2d: torch.Tensor | None = None,
++    candidate_outside_2d: torch.Tensor | None = None,
++    collision_valid: torch.Tensor | None = None,
++    collision_threshold: float = 0.0,
++    outside_threshold: float = 0.0,
++    coord_mass_threshold: float = 0.35,
++    coord_entropy_threshold: float = 0.85,
++    minimum_width_diagonal: float = 1e-4,
++) -> ContactLossOutput:
++    """Compute hard-min pair CE and gated image-space geometry losses.
++
++    ``contact_mtp_coord_mask`` is label-aligned. The causal shift is applied here,
++    so each selected hidden state predicts one of the four coordinate labels.
++    """
++
++    validate_coordinate_token_range(coord_start_token_id, coord_end_token_id)
++    if contact_mtp_coord_mask.shape != hidden_states.shape[:2]:
++        raise ValueError(
++            "contact coordinate mask must match hidden sequence shape: "
++            f"mask={tuple(contact_mtp_coord_mask.shape)}, "
++            f"hidden={tuple(hidden_states.shape[:2])}"
++        )
++
++    shift_mask = contact_mtp_coord_mask[..., 1:].bool().reshape(-1)
++    selected_hidden = hidden_states[..., :-1, :].reshape(
++        -1, hidden_states.shape[-1]
++    )[shift_mask]
++    if selected_hidden.numel() == 0:
++        if contact_positive_mask.bool().any():
++            raise ValueError("positive contact sample has no four-coordinate MTP block")
++        return _empty_output(hidden_states)
++    if selected_hidden.shape[0] % 4 != 0:
++        raise ValueError(
++            "contact MTP coordinate mask must select a multiple of four slots; "
++            f"got {selected_hidden.shape[0]}"
++        )
++
++    block_count = selected_hidden.shape[0] // 4
++    positive_indices = contact_positive_mask.bool().nonzero(as_tuple=False).flatten()
++    if positive_indices.numel() != block_count:
++        raise ValueError(
++            "positive sample/contact block count mismatch: "
++            f"positive_samples={positive_indices.numel()}, blocks={block_count}"
++        )
++
++    candidates = contact_candidates[positive_indices].long()
++    candidate_mask = contact_candidate_mask[positive_indices].bool()
++    image_size = contact_image_size[positive_indices].float()
++    if candidates.ndim != 3 or candidates.shape[-1] != 4:
++        raise ValueError(
++            "contact_candidates must have shape [samples, K, 4], "
++            f"got {candidates.shape}"
++        )
++    if not candidate_mask.any(dim=-1).all():
++        raise ValueError("every positive contact sample needs at least one candidate")
++    if (candidates[candidate_mask] < 0).any() or (
++        candidates[candidate_mask] > 1000
++    ).any():
++        raise ValueError("contact candidate values must be in [0, 1000]")
++    if (image_size <= 0).any() or not torch.isfinite(image_size).all():
++        raise ValueError("positive contact samples need finite positive image sizes")
++
++    if candidate_collision_2d is not None:
++        candidate_collision_2d = candidate_collision_2d[positive_indices].float()
++    if candidate_outside_2d is not None:
++        candidate_outside_2d = candidate_outside_2d[positive_indices].float()
++    if collision_valid is not None:
++        collision_valid = collision_valid[positive_indices].bool()
++    effective_mask = _filter_colliding_candidates(
++        candidate_mask,
++        candidate_collision_2d,
++        candidate_outside_2d,
++        collision_valid,
++        collision_threshold,
++        outside_threshold,
++    )
++
++    valid_block_mask = effective_mask.any(dim=-1)
++    if not valid_block_mask.any():
++        return _empty_output(hidden_states)
++    if not valid_block_mask.all():
++        selected_hidden = selected_hidden.reshape(block_count, 4, -1)[
++            valid_block_mask
++        ].reshape(-1, hidden_states.shape[-1])
++        candidates = candidates[valid_block_mask]
++        effective_mask = effective_mask[valid_block_mask]
++        image_size = image_size[valid_block_mask]
++        block_count = int(valid_block_mask.sum().item())
++
++    block_hidden = selected_hidden.reshape(block_count, 4, -1)
++    if lm_head is None:
++        logits = torch.einsum(
++            "bph,vh->bpv",
++            block_hidden.to(dtype=lm_head_weight.dtype),
++            lm_head_weight,
++        )
++    else:
++        # Calling the module, rather than F.linear on its weight, applies the
++        # exact grasp-token output hook used by generation at every slot.
++        logits = lm_head(block_hidden.to(dtype=lm_head_weight.dtype))
++    logits = logits.float()
++    log_probs = F.log_softmax(logits, dim=-1)
++
++    target_ids = candidates + coord_start_token_id
++    expanded_log_probs = log_probs.unsqueeze(1).expand(
++        -1, candidates.shape[1], -1, -1
++    )
++    identity_log_probs = expanded_log_probs.gather(
++        -1, target_ids.unsqueeze(-1)
++    ).squeeze(-1)
++    swapped_ids = target_ids[..., [2, 3, 0, 1]]
++    swapped_log_probs = expanded_log_probs.gather(
++        -1, swapped_ids.unsqueeze(-1)
++    ).squeeze(-1)
++    identity_loss = -identity_log_probs.mean(dim=-1)
++    swapped_loss = -swapped_log_probs.mean(dim=-1)
++    candidate_orientation_loss = torch.stack(
++        (identity_loss, swapped_loss), dim=-1
++    )
++    candidate_orientation_loss = candidate_orientation_loss.masked_fill(
++        ~effective_mask.unsqueeze(-1), torch.inf
++    )
++    pair_per_block, flat_best_index = candidate_orientation_loss.flatten(1).min(
++        dim=-1
++    )
++    if not torch.isfinite(pair_per_block).all():
++        raise FloatingPointError("non-finite contact pair loss")
++    best_candidate_index = torch.div(
++        flat_best_index, 2, rounding_mode="floor"
++    )
++    batch_index = torch.arange(block_count, device=hidden_states.device)
++    best_target = candidates[batch_index, best_candidate_index].float()
++
++    coord_probs = log_probs[
++        ..., coord_start_token_id : coord_end_token_id + 1
++    ].exp()
++    coord_mass = coord_probs.sum(dim=-1)
++    conditional_coord_probs = coord_probs / coord_mass.unsqueeze(-1).clamp_min(1e-12)
++    coordinate_values = torch.arange(
++        1001, device=hidden_states.device, dtype=torch.float32
++    )
++    soft_coordinates = (
++        conditional_coord_probs * coordinate_values.view(1, 1, -1)
++    ).sum(dim=-1)
++    coord_entropy = -(
++        conditional_coord_probs
++        * conditional_coord_probs.clamp_min(1e-12).log()
++    ).sum(dim=-1) / math.log(1001.0)
++
++    widths_heights = image_size[:, [0, 1, 0, 1]]
++    predicted_pixels = soft_coordinates * widths_heights / 1000.0
++    target_pixels = best_target * widths_heights / 1000.0
++    image_diagonal = torch.linalg.vector_norm(image_size, dim=-1).clamp_min(1e-6)
++
++    predicted_center = 0.5 * (
++        predicted_pixels[:, :2] + predicted_pixels[:, 2:]
++    )
++    target_center = 0.5 * (target_pixels[:, :2] + target_pixels[:, 2:])
++    # Apply SmoothL1 in pixel space, then normalize the resulting loss.  Doing
++    # the normalization first puts ordinary errors inside SmoothL1's quadratic
++    # region and shrinks useful geometry gradients by another diagonal factor.
++    center_per_block = F.smooth_l1_loss(
++        predicted_center,
++        target_center,
++        reduction="none",
++    ).mean(dim=-1) / image_diagonal
++
++    predicted_vector = predicted_pixels[:, 2:] - predicted_pixels[:, :2]
++    target_vector = target_pixels[:, 2:] - target_pixels[:, :2]
++    predicted_width = torch.linalg.vector_norm(predicted_vector, dim=-1)
++    target_width = torch.linalg.vector_norm(target_vector, dim=-1)
++    width_per_block = F.smooth_l1_loss(
++        predicted_width,
++        target_width,
++        reduction="none",
++    ) / image_diagonal
++    cosine = (predicted_vector * target_vector).sum(dim=-1) / (
++        predicted_width.clamp_min(1e-6) * target_width.clamp_min(1e-6)
++    )
++    angle_per_block = pi_periodic_angle_loss(cosine)
++
++    confidence_gate = (
++        (coord_mass.min(dim=-1).values >= coord_mass_threshold)
++        & (coord_entropy.max(dim=-1).values <= coord_entropy_threshold)
++    ).detach()
++    valid_angle = (
++        confidence_gate
++        & (predicted_width / image_diagonal >= minimum_width_diagonal)
++        & (target_width / image_diagonal >= minimum_width_diagonal)
++    ).detach()
++    confidence = confidence_gate.float()
++    angle_gate = valid_angle.float()
++    output = ContactLossOutput(
++        pair_sum=pair_per_block.sum(),
++        center_sum=(center_per_block * confidence).sum(),
++        angle_sum=(angle_per_block * angle_gate).sum(),
++        width_sum=(width_per_block * confidence).sum(),
++        contact_count=confidence.new_tensor(float(block_count)),
++        geometry_active_count=confidence.sum().detach(),
++        coord_mass_min=coord_mass.min().detach(),
++        coord_entropy_max=coord_entropy.max().detach(),
++    )
++    for name in ("pair_sum", "center_sum", "angle_sum", "width_sum"):
++        if not torch.isfinite(getattr(output, name)):
++            raise FloatingPointError(f"non-finite contact loss component: {name}")
++    return output
+diff --git a/Embodied/eaglevl/train/grasp_rect.py b/Embodied/eaglevl/train/grasp_rect.py
+new file mode 100644
+index 0000000..1d22223
+--- /dev/null
++++ b/Embodied/eaglevl/train/grasp_rect.py
+@@ -0,0 +1,291 @@
++"""Loss utilities for direct rectangular-grasp PBD training."""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++
++import torch
++import torch.nn.functional as F
++from eaglevl.train.grasp_contact import validate_coordinate_token_range
++
++
++@dataclass
++class GraspRectLossOutput:
++    pose_sum: torch.Tensor
++    center_sum: torch.Tensor
++    angle_sum: torch.Tensor
++    width_sum: torch.Tensor
++    grasp_count: torch.Tensor
++    geometry_active_count: torch.Tensor
++    coord_mass_min: torch.Tensor
++    coord_entropy_max: torch.Tensor
++    angle_resultant_min: torch.Tensor
++    cx_top1_correct: torch.Tensor
++    cy_top1_correct: torch.Tensor
++    theta_exact_top1_correct: torch.Tensor
++    theta_circular_within1_correct: torch.Tensor
++    width_top1_correct: torch.Tensor
++    pose_four_slot_top1_correct: torch.Tensor
++
++
++def circular_angle_neighbors(
++    target_bins: torch.Tensor,
++    radius: int,
++    bin_count: int = 1001,
++) -> torch.Tensor:
++    radius = int(radius)
++    if radius < 0:
++        raise ValueError("angle wrap radius must be non-negative")
++    if bin_count <= 0:
++        raise ValueError("angle bin count must be positive")
++    offsets = torch.arange(
++        -radius,
++        radius + 1,
++        device=target_bins.device,
++        dtype=target_bins.dtype,
++    )
++    return torch.remainder(target_bins.unsqueeze(-1) + offsets, bin_count)
++
++
++def wrapped_angle_marginal_nll(
++    full_log_probs: torch.Tensor,
++    target_bins: torch.Tensor,
++    *,
++    coord_start_token_id: int,
++    radius: int = 1,
++    bin_count: int = 1001,
++) -> torch.Tensor:
++    """Marginalize one circular quantization neighborhood in full vocabulary."""
++    if full_log_probs.shape[:-1] != target_bins.shape:
++        raise ValueError(
++            "angle log-prob and target shapes must align: "
++            f"log_probs={tuple(full_log_probs.shape)}, "
++            f"targets={tuple(target_bins.shape)}"
++        )
++    if (target_bins < 0).any() or (target_bins >= bin_count).any():
++        raise ValueError("angle target bins are outside the circular vocabulary")
++    neighbors = circular_angle_neighbors(target_bins.long(), radius, bin_count)
++    token_ids = neighbors + int(coord_start_token_id)
++    if token_ids.max() >= full_log_probs.shape[-1]:
++        raise ValueError("angle coordinate token IDs exceed full vocabulary")
++    neighbor_log_probs = full_log_probs.gather(-1, token_ids)
++    return -torch.logsumexp(neighbor_log_probs, dim=-1)
++
++
++def double_angle_distribution(
++    conditional_angle_probs: torch.Tensor,
++) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
++    if conditional_angle_probs.shape[-1] != 1001:
++        raise ValueError("double-angle distribution requires 1001 angle bins")
++    bins = torch.arange(
++        1001,
++        device=conditional_angle_probs.device,
++        dtype=torch.float32,
++    )
++    phase = 2.0 * math.pi * bins / 1001.0
++    cosine = (conditional_angle_probs.float() * phase.cos()).sum(dim=-1)
++    sine = (conditional_angle_probs.float() * phase.sin()).sum(dim=-1)
++    resultant = torch.sqrt(cosine.square() + sine.square())
++    return cosine, sine, resultant
++
++
++def double_angle_loss(
++    conditional_angle_probs: torch.Tensor,
++    target_bins: torch.Tensor,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    cosine, sine, resultant = double_angle_distribution(
++        conditional_angle_probs
++    )
++    target_phase = 2.0 * math.pi * target_bins.float() / 1001.0
++    alignment = (
++        cosine * target_phase.cos() + sine * target_phase.sin()
++    ) / resultant.clamp_min(1e-8)
++    return 1.0 - alignment.clamp(-1.0, 1.0), resultant
++
++
++def _empty_output(hidden_states: torch.Tensor) -> GraspRectLossOutput:
++    zero = hidden_states.sum() * 0.0
++    scalar_zero = zero.detach().new_zeros(())
++    return GraspRectLossOutput(
++        pose_sum=zero,
++        center_sum=zero,
++        angle_sum=zero,
++        width_sum=zero,
++        grasp_count=scalar_zero,
++        geometry_active_count=scalar_zero,
++        coord_mass_min=scalar_zero.new_ones(()),
++        coord_entropy_max=scalar_zero,
++        angle_resultant_min=scalar_zero.new_ones(()),
++        cx_top1_correct=scalar_zero,
++        cy_top1_correct=scalar_zero,
++        theta_exact_top1_correct=scalar_zero,
++        theta_circular_within1_correct=scalar_zero,
++        width_top1_correct=scalar_zero,
++        pose_four_slot_top1_correct=scalar_zero,
++    )
++
++
++def compute_grasp_rect_auxiliary_losses(
++    *,
++    hidden_states: torch.Tensor,
++    lm_head_weight: torch.Tensor,
++    grasp_rect_mtp_coord_mask: torch.Tensor,
++    grasp_rect_candidates: torch.Tensor,
++    grasp_rect_candidate_mask: torch.Tensor,
++    grasp_rect_positive_mask: torch.Tensor,
++    grasp_rect_image_size: torch.Tensor,
++    coord_start_token_id: int,
++    coord_end_token_id: int,
++    lm_head: torch.nn.Module | None = None,
++    angle_wrap_radius: int = 1,
++    coord_mass_threshold: float = 0.35,
++    coord_entropy_threshold: float = 0.85,
++    angle_resultant_threshold: float = 0.05,
++    minimum_width_diagonal: float = 1e-4,
++) -> GraspRectLossOutput:
++    validate_coordinate_token_range(coord_start_token_id, coord_end_token_id)
++    if grasp_rect_mtp_coord_mask.shape != hidden_states.shape[:2]:
++        raise ValueError("grasp rect coordinate mask must match hidden sequence")
++
++    shift_mask = grasp_rect_mtp_coord_mask[..., 1:].bool().reshape(-1)
++    selected_hidden = hidden_states[..., :-1, :].reshape(
++        -1, hidden_states.shape[-1]
++    )[shift_mask]
++    if selected_hidden.numel() == 0:
++        if grasp_rect_positive_mask.bool().any():
++            raise ValueError("positive grasp rect sample has no four-slot MTP block")
++        return _empty_output(hidden_states)
++    if selected_hidden.shape[0] % 4 != 0:
++        raise ValueError("grasp rect coordinate mask must select four-slot blocks")
++
++    block_count = selected_hidden.shape[0] // 4
++    positive_indices = (
++        grasp_rect_positive_mask.bool().nonzero(as_tuple=False).flatten()
++    )
++    if positive_indices.numel() != block_count:
++        raise ValueError("positive sample/grasp rect block count mismatch")
++    candidates = grasp_rect_candidates[positive_indices].long()
++    candidate_mask = grasp_rect_candidate_mask[positive_indices].bool()
++    image_size = grasp_rect_image_size[positive_indices].float()
++    if candidates.ndim != 3 or candidates.shape[-1] != 4:
++        raise ValueError("grasp_rect_candidates must have shape [samples, K, 4]")
++    if not candidate_mask.any(dim=-1).all():
++        raise ValueError("every positive grasp rect sample needs a candidate")
++    if (candidates[candidate_mask] < 0).any() or (
++        candidates[candidate_mask] > 1000
++    ).any():
++        raise ValueError("grasp rect candidate values must be in [0, 1000]")
++    if (
++        candidates[..., 3][candidate_mask].float() / 1000.0
++        <= float(minimum_width_diagonal)
++    ).any():
++        raise ValueError("grasp rect candidate width must exceed minimum")
++    if (image_size <= 0).any() or not torch.isfinite(image_size).all():
++        raise ValueError("positive grasp rect samples need positive image sizes")
++
++    block_hidden = selected_hidden.reshape(block_count, 4, -1)
++    if lm_head is None:
++        logits = torch.einsum(
++            "bph,vh->bpv",
++            block_hidden.to(dtype=lm_head_weight.dtype),
++            lm_head_weight,
++        )
++    else:
++        logits = lm_head(block_hidden.to(dtype=lm_head_weight.dtype))
++    log_probs = F.log_softmax(logits.float(), dim=-1)
++
++    expanded_log_probs = log_probs.unsqueeze(1).expand(
++        -1, candidates.shape[1], -1, -1
++    )
++    coordinate_target_ids = candidates + coord_start_token_id
++    standard_log_probs = expanded_log_probs.gather(
++        -1, coordinate_target_ids.unsqueeze(-1)
++    ).squeeze(-1)
++    angle_log_probs = wrapped_angle_marginal_nll(
++        expanded_log_probs[:, :, 2, :],
++        candidates[:, :, 2],
++        coord_start_token_id=coord_start_token_id,
++        radius=angle_wrap_radius,
++    )
++    slot_losses = -standard_log_probs
++    slot_losses[..., 2] = angle_log_probs
++    candidate_losses = slot_losses.mean(dim=-1).masked_fill(
++        ~candidate_mask, torch.inf
++    )
++    pose_per_block, best_candidate_index = candidate_losses.min(dim=-1)
++    if not torch.isfinite(pose_per_block).all():
++        raise FloatingPointError("non-finite grasp rect pose loss")
++    batch_indices = torch.arange(block_count, device=hidden_states.device)
++    best_target = candidates[batch_indices, best_candidate_index].float()
++
++    coord_probs = log_probs[
++        ..., coord_start_token_id : coord_end_token_id + 1
++    ].exp()
++    coord_mass = coord_probs.sum(dim=-1)
++    conditional_probs = coord_probs / coord_mass.unsqueeze(-1).clamp_min(1e-12)
++    predicted_bins = conditional_probs.argmax(dim=-1)
++    target_bins = best_target.long()
++    exact_slots = predicted_bins.eq(target_bins)
++    theta_neighbors = circular_angle_neighbors(target_bins[:, 2], radius=1)
++    theta_within1 = predicted_bins[:, 2].unsqueeze(-1).eq(
++        theta_neighbors
++    ).any(dim=-1)
++    coordinate_values = torch.arange(
++        1001, device=hidden_states.device, dtype=torch.float32
++    )
++    linear_soft_values = (
++        conditional_probs * coordinate_values.view(1, 1, -1)
++    ).sum(dim=-1)
++    coord_entropy = -(
++        conditional_probs * conditional_probs.clamp_min(1e-12).log()
++    ).sum(dim=-1) / math.log(1001.0)
++
++    image_diagonal = torch.linalg.vector_norm(image_size, dim=-1).clamp_min(1e-6)
++    predicted_center = linear_soft_values[:, :2] * image_size / 1000.0
++    target_center = best_target[:, :2] * image_size / 1000.0
++    center_per_block = F.smooth_l1_loss(
++        predicted_center, target_center, reduction="none"
++    ).mean(dim=-1) / image_diagonal
++    predicted_width = linear_soft_values[:, 3] * image_diagonal / 1000.0
++    target_width = best_target[:, 3] * image_diagonal / 1000.0
++    width_per_block = F.smooth_l1_loss(
++        predicted_width, target_width, reduction="none"
++    ) / image_diagonal
++    angle_per_block, angle_resultant = double_angle_loss(
++        conditional_probs[:, 2, :], best_target[:, 2]
++    )
++
++    confidence_gate = (
++        (coord_mass.min(dim=-1).values >= coord_mass_threshold)
++        & (coord_entropy.max(dim=-1).values <= coord_entropy_threshold)
++        & (angle_resultant >= angle_resultant_threshold)
++    ).detach()
++    valid_angle = (
++        confidence_gate
++        & (predicted_width / image_diagonal > minimum_width_diagonal)
++        & (target_width / image_diagonal > minimum_width_diagonal)
++    ).detach()
++    confidence = confidence_gate.float()
++    angle_gate = valid_angle.float()
++    output = GraspRectLossOutput(
++        pose_sum=pose_per_block.sum(),
++        center_sum=(center_per_block * confidence).sum(),
++        angle_sum=(angle_per_block * angle_gate).sum(),
++        width_sum=(width_per_block * confidence).sum(),
++        grasp_count=confidence.new_tensor(float(block_count)),
++        geometry_active_count=confidence.sum().detach(),
++        coord_mass_min=coord_mass.min().detach(),
++        coord_entropy_max=coord_entropy.max().detach(),
++        angle_resultant_min=angle_resultant.min().detach(),
++        cx_top1_correct=exact_slots[:, 0].sum().detach(),
++        cy_top1_correct=exact_slots[:, 1].sum().detach(),
++        theta_exact_top1_correct=exact_slots[:, 2].sum().detach(),
++        theta_circular_within1_correct=theta_within1.sum().detach(),
++        width_top1_correct=exact_slots[:, 3].sum().detach(),
++        pose_four_slot_top1_correct=exact_slots.all(dim=-1).sum().detach(),
++    )
++    for name in ("pose_sum", "center_sum", "angle_sum", "width_sum"):
++        if not torch.isfinite(getattr(output, name)):
++            raise FloatingPointError(f"non-finite grasp rect loss: {name}")
++    return output
+diff --git a/Embodied/eaglevl/utils/locany/grasp_adapter_utils.py b/Embodied/eaglevl/utils/locany/grasp_adapter_utils.py
+new file mode 100644
+index 0000000..cb6c74e
+--- /dev/null
++++ b/Embodied/eaglevl/utils/locany/grasp_adapter_utils.py
+@@ -0,0 +1,35 @@
++"""Shared grasp task-token adapter operations for training and inference."""
++
++from __future__ import annotations
++
++import torch
++import torch.nn.functional as F
++
++
++def apply_grasp_task_output_delta(
++    hidden_states: torch.Tensor,
++    logits: torch.Tensor,
++    task_token_ids: torch.Tensor,
++    output_delta: torch.Tensor,
++) -> torch.Tensor:
++    """Apply the compact grasp-token output adapter to every logit row."""
++    if hidden_states.shape[:-1] != logits.shape[:-1]:
++        raise ValueError(
++            "hidden-state/logit leading dimensions differ: "
++            f"hidden={tuple(hidden_states.shape)}, logits={tuple(logits.shape)}"
++        )
++    if output_delta.ndim != 2 or output_delta.shape[1] != hidden_states.shape[-1]:
++        raise ValueError(
++            "grasp output adapter has incompatible shape: "
++            f"delta={tuple(output_delta.shape)}, hidden={tuple(hidden_states.shape)}"
++        )
++    task_token_ids = task_token_ids.to(device=logits.device, dtype=torch.long)
++    if task_token_ids.numel() != output_delta.shape[0]:
++        raise ValueError(
++            "grasp task-token IDs and output-adapter rows differ: "
++            f"tokens={task_token_ids.numel()}, rows={output_delta.shape[0]}"
++        )
++    correction = F.linear(
++        hidden_states.to(dtype=output_delta.dtype), output_delta
++    ).to(dtype=logits.dtype)
++    return logits.index_add(-1, task_token_ids, correction)
